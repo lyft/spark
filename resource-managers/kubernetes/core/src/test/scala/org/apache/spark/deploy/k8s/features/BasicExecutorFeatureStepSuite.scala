@@ -18,6 +18,7 @@ package org.apache.spark.deploy.k8s.features
 
 import scala.collection.JavaConverters._
 
+import com.google.common.net.InternetDomainName
 import io.fabric8.kubernetes.api.model._
 import org.mockito.MockitoAnnotations
 import org.scalatest.{BeforeAndAfter, BeforeAndAfterEach}
