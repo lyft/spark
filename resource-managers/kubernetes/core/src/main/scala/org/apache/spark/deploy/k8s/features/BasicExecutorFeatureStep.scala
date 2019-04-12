@@ -35,6 +35,10 @@ private[spark] class BasicExecutorFeatureStep(
 
   // Consider moving some of these fields to KubernetesConf or KubernetesExecutorSpecificConf
   private val executorExtraClasspath = kubernetesConf.get(EXECUTOR_CLASS_PATH)
+
+  private val executorContainerName = kubernetesConf
+    .get(KUBERNETES_EXECUTOR_CONTAINER_NAME)
+
   private val executorContainerImage = kubernetesConf
     .get(EXECUTOR_CONTAINER_IMAGE)
     .getOrElse(throw new SparkException("Must specify the executor container image"))
@@ -139,7 +143,7 @@ private[spark] class BasicExecutorFeatureStep(
       }
 
     val executorContainer = new ContainerBuilder(pod.container)
-      .withName("executor")
+      .withName(executorContainerName)
       .withImage(executorContainerImage)
       .withImagePullPolicy(kubernetesConf.imagePullPolicy())
       .withNewResources()

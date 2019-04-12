@@ -37,6 +37,9 @@ private[spark] class BasicDriverFeatureStep(
     .get(KUBERNETES_DRIVER_POD_NAME)
     .getOrElse(s"${conf.appResourceNamePrefix}-driver")
 
+  private val driverContainerName = conf
+    .get(KUBERNETES_DRIVER_CONTAINER_NAME)
+
   private val driverContainerImage = conf
     .get(DRIVER_CONTAINER_IMAGE)
     .getOrElse(throw new SparkException("Must specify the driver container image"))
@@ -80,7 +83,7 @@ private[spark] class BasicDriverFeatureStep(
     )
     val driverUIPort = SparkUI.getUIPort(conf.sparkConf)
     val driverContainer = new ContainerBuilder(pod.container)
-      .withName(DRIVER_CONTAINER_NAME)
+      .withName(driverContainerName)
       .withImage(driverContainerImage)
       .withImagePullPolicy(conf.imagePullPolicy())
       .addNewPort()
