@@ -111,12 +111,25 @@ private[spark] object Config extends Logging {
       .stringConf
       .createOptional
 
+  val KUBERNETES_DRIVER_CONTAINER_NAME =
+    ConfigBuilder("spark.kubernetes.driver.container.name")
+      .doc("Name of the driver pod container name.")
+      .stringConf
+      .createWithDefault(Constants.DRIVER_CONTAINER_NAME)
+
   val KUBERNETES_EXECUTOR_POD_NAME_PREFIX =
     ConfigBuilder("spark.kubernetes.executor.podNamePrefix")
       .doc("Prefix to use in front of the executor pod names.")
       .internal()
       .stringConf
       .createWithDefault("spark")
+
+  val KUBERNETES_EXECUTOR_CONTAINER_NAME =
+    ConfigBuilder("spark.kubernetes.executor.container.name")
+      .doc("The name to use for the executor pod container name.")
+      .internal()
+      .stringConf
+      .createWithDefault("executor")
 
   val KUBERNETES_PYSPARK_PY_FILES =
     ConfigBuilder("spark.kubernetes.python.pyFiles")
