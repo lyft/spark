@@ -121,7 +121,7 @@
     <hadoop.version>2.7.4</hadoop.version>
     <protobuf.version>2.5.0</protobuf.version>
     <yarn.version>${hadoop.version}</yarn.version>
-    <zookeeper.version>3.4.6</zookeeper.version>
+    <zookeeper.version>3.4.14</zookeeper.version>
     <curator.version>2.7.1</curator.version>
     <hive.group>org.spark-project.hive</hive.group>
     <!-- Version used in Maven Hive dependency -->
@@ -141,7 +141,7 @@
     <ivy.version>2.4.0</ivy.version>
     <oro.version>2.0.8</oro.version>
     <codahale.metrics.version>3.1.5</codahale.metrics.version>
-    <avro.version>1.8.2</avro.version>
+    <avro.version>1.9.0</avro.version>
     <avro.mapred.classifier>hadoop2</avro.mapred.classifier>
     <aws.kinesis.client.version>1.8.10</aws.kinesis.client.version>
     <!-- Should be consistent with Kinesis client dependency -->
@@ -195,8 +195,8 @@
     <arrow.version>0.10.0</arrow.version>
 
     <test.java.home>${java.home}</test.java.home>
-    <test.exclude.tags></test.exclude.tags>
-    <test.include.tags></test.include.tags>
+    <test.exclude.tags/>
+    <test.include.tags/>
 
     <!-- Package to use when relocating shaded classes. -->
     <spark.shade.packageName>org.spark_project</spark.shade.packageName>
@@ -391,7 +391,7 @@
       <dependency>
         <groupId>com.google.guava</groupId>
         <artifactId>guava</artifactId>
-        <version>14.0.1</version>
+        <version>24.1.1-android</version>
         <scope>provided</scope>
       </dependency>
       <dependency>
@@ -2368,7 +2368,7 @@
                     </goals>
                   </pluginExecutionFilter>
                   <action>
-                    <ignore></ignore>
+                    <ignore/>
                   </action>
                 </pluginExecution>
                 <pluginExecution>
@@ -2381,7 +2381,7 @@
                     </goals>
                   </pluginExecutionFilter>
                   <action>
-                    <ignore></ignore>
+                    <ignore/>
                   </action>
                 </pluginExecution>
                 <pluginExecution>
@@ -2394,7 +2394,7 @@
                     </goals>
                   </pluginExecutionFilter>
                   <action>
-                    <ignore></ignore>
+                    <ignore/>
                   </action>
                 </pluginExecution>
               </pluginExecutions>
@@ -2576,7 +2576,7 @@
             </goals>
             <configuration>
               <target>
-                <mkdir dir="${project.build.directory}/tmp" />
+                <mkdir dir="${project.build.directory}/tmp"/>
               </target>
             </configuration>
           </execution>
@@ -2694,7 +2694,7 @@
       <properties>
         <hadoop.version>3.1.0</hadoop.version>
         <curator.version>2.12.0</curator.version>
-        <zookeeper.version>3.4.9</zookeeper.version>
+        <zookeeper.version>3.4.14</zookeeper.version>
       </properties>
     </profile>
 
