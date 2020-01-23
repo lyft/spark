@@ -33,6 +33,13 @@ package object config {
     .toSequence
     .createOptional
 
+  private[spark] val APPLICATION_PRIORITY = ConfigBuilder("spark.yarn.priority")
+    .doc("Application priority for YARN to define pending applications ordering policy, those" +
+      " with higher value have a better opportunity to be activated. Currently, YARN only" +
+      " supports application priority when using FIFO ordering policy.")
+    .intConf
+    .createOptional
+
   private[spark] val AM_ATTEMPT_FAILURE_VALIDITY_INTERVAL_MS =
     ConfigBuilder("spark.yarn.am.attemptFailuresValidityInterval")
       .doc("Interval after which AM failures will be considered independent and " +
@@ -122,11 +129,6 @@ package object config {
     .intConf
     .createOptional
 
-  private[spark] val STAGING_DIR = ConfigBuilder("spark.yarn.stagingDir")
-    .doc("Staging directory used while submitting applications.")
-    .stringConf
-    .createOptional
-
   /* Launcher configuration. */
 
   private[spark] val WAIT_FOR_APP_COMPLETION = ConfigBuilder("spark.yarn.submit.waitAppCompletion")
@@ -186,12 +188,6 @@ package object config {
       .timeConf(TimeUnit.MILLISECONDS)
       .createWithDefaultString("200ms")
 
-  private[spark] val SCHEDULER_SERVICES = ConfigBuilder("spark.yarn.services")
-    .doc("A comma-separated list of class names of services to add to the scheduler.")
-    .stringConf
-    .toSequence
-    .createWithDefault(Nil)
-
   private[spark] val AM_FINAL_MSG_LIMIT = ConfigBuilder("spark.yarn.am.finalMessageLimit")
     .doc("The limit size of final diagnostic message for our ApplicationMaster to unregister from" +
       " the ResourceManager.")
@@ -236,19 +232,13 @@ package object config {
       .stringConf
       .createOptional
 
-  /* Security configuration. */
+  /* Unmanaged AM configuration. */
 
-  private[spark] val NAMENODES_TO_ACCESS = ConfigBuilder("spark.yarn.access.namenodes")
-    .doc("Extra NameNode URLs for which to request delegation tokens. The NameNode that hosts " +
-      "fs.defaultFS does not need to be listed here.")
-    .stringConf
-    .toSequence
-    .createWithDefault(Nil)
-
-  private[spark] val FILESYSTEMS_TO_ACCESS = ConfigBuilder("spark.yarn.access.hadoopFileSystems")
-    .doc("Extra Hadoop filesystem URLs for which to request delegation tokens. The filesystem " +
-      "that hosts fs.defaultFS does not need to be listed here.")
-    .fallbackConf(NAMENODES_TO_ACCESS)
+  private[spark] val YARN_UNMANAGED_AM = ConfigBuilder("spark.yarn.unmanagedAM.enabled")
+    .doc("In client mode, whether to launch the Application Master service as part of the client " +
+      "using unmanaged am.")
+    .booleanConf
+    .createWithDefault(false)
 
   /* Rolled log aggregation configuration. */
 
@@ -326,6 +316,12 @@ package object config {
     ConfigBuilder("spark.yarn.blacklist.executor.launch.blacklisting.enabled")
       .booleanConf
       .createWithDefault(false)
+
+  /* Initially blacklisted YARN nodes. */
+  private[spark] val YARN_EXCLUDE_NODES = ConfigBuilder("spark.yarn.exclude.nodes")
+      .stringConf
+      .toSequence
+      .createWithDefault(Nil)
 
   private[yarn] val YARN_EXECUTOR_RESOURCE_TYPES_PREFIX = "spark.yarn.executor.resource."
   private[yarn] val YARN_DRIVER_RESOURCE_TYPES_PREFIX = "spark.yarn.driver.resource."

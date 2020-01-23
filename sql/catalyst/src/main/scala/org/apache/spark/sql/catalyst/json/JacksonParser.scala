@@ -31,7 +31,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.util._
 import org.apache.spark.sql.types._
-import org.apache.spark.unsafe.types.UTF8String
+import org.apache.spark.unsafe.types.{CalendarInterval, UTF8String}
 import org.apache.spark.util.Utils
 
 /**
@@ -52,21 +52,23 @@ class JacksonParser(
   // `ValueConverter`s for the root schema for all fields in the schema
   private val rootConverter = makeRootConverter(schema)
 
-  private val factory = new JsonFactory()
-  options.setJacksonOptions(factory)
+  private val factory = options.buildJsonFactory()
 
   private val timestampFormatter = TimestampFormatter(
     options.timestampFormat,
-    options.timeZone,
+    options.zoneId,
     options.locale)
-  private val dateFormatter = DateFormatter(options.dateFormat, options.locale)
+  private val dateFormatter = DateFormatter(
+    options.dateFormat,
+    options.zoneId,
+    options.locale)
 
   /**
    * Create a converter which converts the JSON documents held by the `JsonParser`
    * to a value according to a desired schema. This is a wrapper for the method
    * `makeConverter()` to handle a row wrapped with an array.
    */
-  private def makeRootConverter(dt: DataType): JsonParser => Seq[InternalRow] = {
+  private def makeRootConverter(dt: DataType): JsonParser => Iterable[InternalRow] = {
     dt match {
       case st: StructType => makeStructRootConverter(st)
       case mt: MapType => makeMapRootConverter(mt)
@@ -74,11 +76,11 @@ class JacksonParser(
     }
   }
 
-  private def makeStructRootConverter(st: StructType): JsonParser => Seq[InternalRow] = {
+  private def makeStructRootConverter(st: StructType): JsonParser => Iterable[InternalRow] = {
     val elementConverter = makeConverter(st)
     val fieldConverters = st.map(_.dataType).map(makeConverter).toArray
-    (parser: JsonParser) => parseJsonToken[Seq[InternalRow]](parser, st) {
-      case START_OBJECT => convertObject(parser, st, fieldConverters) :: Nil
+    (parser: JsonParser) => parseJsonToken[Iterable[InternalRow]](parser, st) {
+      case START_OBJECT => Some(convertObject(parser, st, fieldConverters))
         // SPARK-3308: support reading top level JSON arrays and take every element
         // in such an array as a row
         //
@@ -97,26 +99,26 @@ class JacksonParser(
         // Here, as we support reading top level JSON arrays and take every element
         // in such an array as a row, this case is possible.
         if (array.numElements() == 0) {
-          Nil
+          Array.empty[InternalRow]
         } else {
-          array.toArray[InternalRow](schema).toSeq
+          array.toArray[InternalRow](schema)
         }
       case START_ARRAY =>
         throw new RuntimeException("Parsing JSON arrays as structs is forbidden.")
     }
   }
 
-  private def makeMapRootConverter(mt: MapType): JsonParser => Seq[InternalRow] = {
+  private def makeMapRootConverter(mt: MapType): JsonParser => Iterable[InternalRow] = {
     val fieldConverter = makeConverter(mt.valueType)
-    (parser: JsonParser) => parseJsonToken[Seq[InternalRow]](parser, mt) {
-      case START_OBJECT => Seq(InternalRow(convertMap(parser, fieldConverter)))
+    (parser: JsonParser) => parseJsonToken[Iterable[InternalRow]](parser, mt) {
+      case START_OBJECT => Some(InternalRow(convertMap(parser, fieldConverter)))
     }
   }
 
-  private def makeArrayRootConverter(at: ArrayType): JsonParser => Seq[InternalRow] = {
+  private def makeArrayRootConverter(at: ArrayType): JsonParser => Iterable[InternalRow] = {
     val elemConverter = makeConverter(at.elementType)
-    (parser: JsonParser) => parseJsonToken[Seq[InternalRow]](parser, at) {
-      case START_ARRAY => Seq(InternalRow(convertArray(parser, elemConverter)))
+    (parser: JsonParser) => parseJsonToken[Iterable[InternalRow]](parser, at) {
+      case START_ARRAY => Some(InternalRow(convertArray(parser, elemConverter)))
       case START_OBJECT if at.elementType.isInstanceOf[StructType] =>
         // This handles the case when an input JSON object is a structure but
         // the specified schema is an array of structures. In that case, the input JSON is
@@ -138,7 +140,7 @@ class JacksonParser(
         //
         val st = at.elementType.asInstanceOf[StructType]
         val fieldConverters = st.map(_.dataType).map(makeConverter).toArray
-        Seq(InternalRow(new GenericArrayData(Seq(convertObject(parser, st, fieldConverters)))))
+        Some(InternalRow(new GenericArrayData(Seq(convertObject(parser, st, fieldConverters)))))
     }
   }
 
@@ -248,6 +250,12 @@ class JacksonParser(
         case VALUE_STRING if parser.getTextLength >= 1 =>
           val bigDecimal = decimalParser(parser.getText)
           Decimal(bigDecimal, dt.precision, dt.scale)
+      }
+
+    case CalendarIntervalType => (parser: JsonParser) =>
+      parseJsonToken[CalendarInterval](parser, dataType) {
+        case VALUE_STRING =>
+          IntervalUtils.safeStringToInterval(UTF8String.fromString(parser.getText))
       }
 
     case st: StructType =>
@@ -393,13 +401,13 @@ class JacksonParser(
   def parse[T](
       record: T,
       createParser: (JsonFactory, T) => JsonParser,
-      recordLiteral: T => UTF8String): Seq[InternalRow] = {
+      recordLiteral: T => UTF8String): Iterable[InternalRow] = {
     try {
       Utils.tryWithResource(createParser(factory, record)) { parser =>
         // a null first token is equivalent to testing for input.trim.isEmpty
         // but it works on any token stream and not just strings
         parser.nextToken() match {
-          case null => throw new RuntimeException("Not found any JSON token")
+          case null => None
           case _ => rootConverter.apply(parser) match {
             case null => throw new RuntimeException("Root converter returned null")
             case rows => rows

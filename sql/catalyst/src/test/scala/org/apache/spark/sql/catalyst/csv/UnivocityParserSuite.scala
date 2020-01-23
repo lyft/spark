@@ -24,8 +24,11 @@ import java.util.{Locale, TimeZone}
 import org.apache.commons.lang3.time.FastDateFormat
 
 import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.plans.SQLHelper
+import org.apache.spark.sql.catalyst.util.DateTimeConstants._
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
+import org.apache.spark.sql.sources.{EqualTo, Filter, StringStartsWith}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
@@ -116,7 +119,9 @@ class UnivocityParserSuite extends SparkFunSuite with SQLHelper {
     parser = new UnivocityParser(StructType(Seq.empty), timestampsOptions)
     val customTimestamp = "31/01/2015 00:00"
     var format = FastDateFormat.getInstance(
-      timestampsOptions.timestampFormat, timestampsOptions.timeZone, timestampsOptions.locale)
+      timestampsOptions.timestampFormat,
+      TimeZone.getTimeZone(timestampsOptions.zoneId),
+      timestampsOptions.locale)
     val expectedTime = format.parse(customTimestamp).getTime
     val castedTimestamp = parser.makeConverter("_1", TimestampType, nullable = true)
         .apply(customTimestamp)
@@ -126,7 +131,9 @@ class UnivocityParserSuite extends SparkFunSuite with SQLHelper {
     val dateOptions = new CSVOptions(Map("dateFormat" -> "dd/MM/yyyy"), false, "GMT")
     parser = new UnivocityParser(StructType(Seq.empty), dateOptions)
     format = FastDateFormat.getInstance(
-      dateOptions.dateFormat, dateOptions.timeZone, dateOptions.locale)
+      dateOptions.dateFormat,
+      TimeZone.getTimeZone(dateOptions.zoneId),
+      dateOptions.locale)
     val expectedDate = format.parse(customDate).getTime
     val castedDate = parser.makeConverter("_1", DateType, nullable = true)
         .apply(customDate)
@@ -137,11 +144,11 @@ class UnivocityParserSuite extends SparkFunSuite with SQLHelper {
       "timestampFormat" -> "yyyy-MM-dd HH:mm:ss",
       "dateFormat" -> "yyyy-MM-dd"), false, "UTC")
     parser = new UnivocityParser(StructType(Seq.empty), timestampsOptions)
-    val expected = 1420070400 * DateTimeUtils.MICROS_PER_SECOND
+    val expected = 1420070400 * MICROS_PER_SECOND
     assert(parser.makeConverter("_1", TimestampType).apply(timestamp) ==
       expected)
     assert(parser.makeConverter("_1", DateType).apply("2015-01-01") ==
-      expected / DateTimeUtils.MICROS_PER_DAY)
+      expected / MICROS_PER_DAY)
   }
 
   test("Throws exception for casting an invalid string to Float and Double Types") {
@@ -226,5 +233,88 @@ class UnivocityParserSuite extends SparkFunSuite with SQLHelper {
     }
 
     Seq("en-US", "ko-KR", "ru-RU", "de-DE").foreach(checkDecimalParsing)
+  }
+
+  test("SPARK-27591 UserDefinedType can be read") {
+
+    @SQLUserDefinedType(udt = classOf[StringBasedUDT])
+    case class NameId(name: String, id: Int)
+
+    class StringBasedUDT extends UserDefinedType[NameId] {
+      override def sqlType: DataType = StringType
+
+      override def serialize(obj: NameId): Any = s"${obj.name}\t${obj.id}"
+
+      override def deserialize(datum: Any): NameId = datum match {
+        case s: String =>
+          val split = s.split("\t")
+          if (split.length != 2) throw new RuntimeException(s"Can't parse $s into NameId");
+          NameId(split(0), Integer.parseInt(split(1)))
+        case _ => throw new RuntimeException(s"Can't parse $datum into NameId");
+      }
+
+      override def userClass: Class[NameId] = classOf[NameId]
+    }
+
+    object StringBasedUDT extends StringBasedUDT
+
+    val input = "name\t42"
+    val expected = UTF8String.fromString(input)
+
+    val options = new CSVOptions(Map.empty[String, String], false, "GMT")
+    val parser = new UnivocityParser(StructType(Seq.empty), options)
+
+    val convertedValue = parser.makeConverter("_1", StringBasedUDT, nullable = false).apply(input)
+
+    assert(convertedValue.isInstanceOf[UTF8String])
+    assert(convertedValue == expected)
+  }
+
+  test("skipping rows using pushdown filters") {
+    def check(
+        input: String = "1,a",
+        dataSchema: StructType = StructType.fromDDL("i INTEGER, s STRING"),
+        requiredSchema: StructType = StructType.fromDDL("i INTEGER"),
+        filters: Seq[Filter],
+        expected: Option[InternalRow]): Unit = {
+      Seq(false, true).foreach { columnPruning =>
+        val options = new CSVOptions(Map.empty[String, String], columnPruning, "GMT")
+        val parser = new UnivocityParser(dataSchema, requiredSchema, options, filters)
+        val actual = parser.parse(input)
+        assert(actual === expected)
+      }
+    }
+
+    check(filters = Seq(), expected = Some(InternalRow(1)))
+    check(filters = Seq(EqualTo("i", 1)), expected = Some(InternalRow(1)))
+    check(filters = Seq(EqualTo("i", 2)), expected = None)
+    check(
+      requiredSchema = StructType.fromDDL("s STRING"),
+      filters = Seq(StringStartsWith("s", "b")),
+      expected = None)
+    check(
+      requiredSchema = StructType.fromDDL("i INTEGER, s STRING"),
+      filters = Seq(StringStartsWith("s", "a")),
+      expected = Some(InternalRow(1, UTF8String.fromString("a"))))
+    check(
+      input = "1,a,3.14",
+      dataSchema = StructType.fromDDL("i INTEGER, s STRING, d DOUBLE"),
+      requiredSchema = StructType.fromDDL("i INTEGER, d DOUBLE"),
+      filters = Seq(EqualTo("d", 3.14)),
+      expected = Some(InternalRow(1, 3.14)))
+
+    val errMsg = intercept[IllegalArgumentException] {
+      check(filters = Seq(EqualTo("invalid attr", 1)), expected = None)
+    }.getMessage
+    assert(errMsg.contains("invalid attr does not exist"))
+
+    val errMsg2 = intercept[IllegalArgumentException] {
+      check(
+        dataSchema = new StructType(),
+        requiredSchema = new StructType(),
+        filters = Seq(EqualTo("i", 1)),
+        expected = Some(InternalRow.empty))
+    }.getMessage
+    assert(errMsg2.contains("i does not exist"))
   }
 }

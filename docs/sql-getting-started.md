@@ -2,6 +2,21 @@
 layout: global
 title: Getting Started
 displayTitle: Getting Started
+license: |
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements.  See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License.  You may obtain a copy of the License at
+ 
+     http://www.apache.org/licenses/LICENSE-2.0
+ 
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
 ---
 
 * Table of contents
@@ -331,6 +346,9 @@ For example:
 
 </div>
 
+## Scalar Functions
+(to be filled soon)
+
 ## Aggregations
 
 The [built-in DataFrames functions](api/scala/index.html#org.apache.spark.sql.functions$) provide common
@@ -339,20 +357,6 @@ While those functions are designed for DataFrames, Spark SQL also has type-safe 
 [Scala](api/scala/index.html#org.apache.spark.sql.expressions.scalalang.typed$) and
 [Java](api/java/org/apache/spark/sql/expressions/javalang/typed.html) to work with strongly typed Datasets.
 Moreover, users are not limited to the predefined aggregate functions and can create their own.
-
-### Untyped User-Defined Aggregate Functions
-Users have to extend the [UserDefinedAggregateFunction](api/scala/index.html#org.apache.spark.sql.expressions.UserDefinedAggregateFunction)
-abstract class to implement a custom untyped aggregate function. For example, a user-defined average
-can look like:
-
-<div class="codetabs">
-<div data-lang="scala"  markdown="1">
-{% include_example untyped_custom_aggregation scala/org/apache/spark/examples/sql/UserDefinedUntypedAggregation.scala%}
-</div>
-<div data-lang="java"  markdown="1">
-{% include_example untyped_custom_aggregation java/org/apache/spark/examples/sql/JavaUserDefinedUntypedAggregation.java%}
-</div>
-</div>
 
 ### Type-Safe User-Defined Aggregate Functions
 
@@ -365,5 +369,18 @@ For example, a type-safe user-defined average can look like:
 </div>
 <div data-lang="java"  markdown="1">
 {% include_example typed_custom_aggregation java/org/apache/spark/examples/sql/JavaUserDefinedTypedAggregation.java%}
+</div>
+</div>
+
+### Untyped User-Defined Aggregate Functions
+Typed aggregations, as described above, may also be registered as untyped aggregating UDFs for use with DataFrames.
+For example, a user-defined average for untyped DataFrames can look like:
+
+<div class="codetabs">
+<div data-lang="scala"  markdown="1">
+{% include_example untyped_custom_aggregation scala/org/apache/spark/examples/sql/UserDefinedUntypedAggregation.scala%}
+</div>
+<div data-lang="java"  markdown="1">
+{% include_example untyped_custom_aggregation java/org/apache/spark/examples/sql/JavaUserDefinedUntypedAggregation.java%}
 </div>
 </div>

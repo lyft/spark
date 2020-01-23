@@ -17,14 +17,10 @@
 
 package org.apache.spark.sql.catalyst.util
 
-import java.time.{Instant, ZoneId}
+import java.time.{LocalDate, ZoneId}
 import java.util.Locale
 
-import scala.util.Try
-
-import org.apache.commons.lang3.time.FastDateFormat
-
-import org.apache.spark.sql.internal.SQLConf
+import DateTimeUtils.{convertSpecialDate, localDateToDays}
 
 sealed trait DateFormatter extends Serializable {
   def parse(s: String): Int // returns days since epoch
@@ -33,66 +29,36 @@ sealed trait DateFormatter extends Serializable {
 
 class Iso8601DateFormatter(
     pattern: String,
+    zoneId: ZoneId,
     locale: Locale) extends DateFormatter with DateTimeFormatterHelper {
 
   @transient
-  private lazy val formatter = buildFormatter(pattern, locale)
-  private val UTC = ZoneId.of("UTC")
-
-  private def toInstant(s: String): Instant = {
-    val temporalAccessor = formatter.parse(s)
-    toInstantWithZoneId(temporalAccessor, UTC)
-  }
+  private lazy val formatter = getOrCreateFormatter(pattern, locale)
 
   override def parse(s: String): Int = {
-    val seconds = toInstant(s).getEpochSecond
-    val days = Math.floorDiv(seconds, DateTimeUtils.SECONDS_PER_DAY)
-    days.toInt
-  }
-
-  override def format(days: Int): String = {
-    val instant = Instant.ofEpochSecond(days * DateTimeUtils.SECONDS_PER_DAY)
-    formatter.withZone(UTC).format(instant)
-  }
-}
-
-class LegacyDateFormatter(pattern: String, locale: Locale) extends DateFormatter {
-  @transient
-  private lazy val format = FastDateFormat.getInstance(pattern, locale)
-
-  override def parse(s: String): Int = {
-    val milliseconds = format.parse(s).getTime
-    DateTimeUtils.millisToDays(milliseconds)
-  }
-
-  override def format(days: Int): String = {
-    val date = DateTimeUtils.toJavaDate(days)
-    format.format(date)
-  }
-}
-
-class LegacyFallbackDateFormatter(
-    pattern: String,
-    locale: Locale) extends LegacyDateFormatter(pattern, locale) {
-  override def parse(s: String): Int = {
-    Try(super.parse(s)).orElse {
-      // If it fails to parse, then tries the way used in 2.0 and 1.x for backwards
-      // compatibility.
-      Try(DateTimeUtils.millisToDays(DateTimeUtils.stringToTime(s).getTime))
-    }.getOrElse {
-      // In Spark 1.5.0, we store the data as number of days since epoch in string.
-      // So, we just convert it to Int.
-      s.toInt
+    val specialDate = convertSpecialDate(s.trim, zoneId)
+    specialDate.getOrElse {
+      val localDate = LocalDate.parse(s, formatter)
+      localDateToDays(localDate)
     }
+  }
+
+  override def format(days: Int): String = {
+    LocalDate.ofEpochDay(days).format(formatter)
   }
 }
 
 object DateFormatter {
-  def apply(format: String, locale: Locale): DateFormatter = {
-    if (SQLConf.get.legacyTimeParserEnabled) {
-      new LegacyFallbackDateFormatter(format, locale)
-    } else {
-      new Iso8601DateFormatter(format, locale)
-    }
+  val defaultPattern: String = "uuuu-MM-dd"
+  val defaultLocale: Locale = Locale.US
+
+  def apply(format: String, zoneId: ZoneId, locale: Locale): DateFormatter = {
+    new Iso8601DateFormatter(format, zoneId, locale)
   }
+
+  def apply(format: String, zoneId: ZoneId): DateFormatter = {
+    apply(format, zoneId, defaultLocale)
+  }
+
+  def apply(zoneId: ZoneId): DateFormatter = apply(defaultPattern, zoneId)
 }

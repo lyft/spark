@@ -17,14 +17,18 @@
 
 package org.apache.spark.sql
 
-import org.apache.spark.sql.catalyst.plans.{Inner, LeftOuter, RightOuter}
-import org.apache.spark.sql.catalyst.plans.logical.Join
+import org.apache.spark.sql.catalyst.plans.{Inner, InnerLike, LeftOuter, RightOuter}
+import org.apache.spark.sql.catalyst.plans.logical.{Filter, Join, LogicalPlan, Project}
+import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
+import org.apache.spark.sql.execution.datasources.LogicalRelation
 import org.apache.spark.sql.execution.joins.BroadcastHashJoinExec
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.test.SharedSQLContext
+import org.apache.spark.sql.test.SharedSparkSession
 
-class DataFrameJoinSuite extends QueryTest with SharedSQLContext {
+class DataFrameJoinSuite extends QueryTest
+  with SharedSparkSession
+  with AdaptiveSparkPlanHelper {
   import testImplicits._
 
   test("join - join using") {
@@ -46,13 +50,13 @@ class DataFrameJoinSuite extends QueryTest with SharedSQLContext {
   }
 
   test("join - sorted columns not in join's outputSet") {
-    val df = Seq((1, 2, "1"), (3, 4, "3")).toDF("int", "int2", "str_sort").as('df1)
-    val df2 = Seq((1, 3, "1"), (5, 6, "5")).toDF("int", "int2", "str").as('df2)
-    val df3 = Seq((1, 3, "1"), (5, 6, "5")).toDF("int", "int2", "str").as('df3)
+    val df = Seq((1, 2, "1"), (3, 4, "3")).toDF("int", "int2", "str_sort").as("df1")
+    val df2 = Seq((1, 3, "1"), (5, 6, "5")).toDF("int", "int2", "str").as("df2")
+    val df3 = Seq((1, 3, "1"), (5, 6, "5")).toDF("int", "int2", "str").as("df3")
 
     checkAnswer(
       df.join(df2, $"df1.int" === $"df2.int", "outer").select($"df1.int", $"df2.int2")
-        .orderBy('str_sort.asc, 'str.asc),
+        .orderBy(Symbol("str_sort").asc, Symbol("str").asc),
       Row(null, 6) :: Row(1, 3) :: Row(3, null) :: Nil)
 
     checkAnswer(
@@ -84,25 +88,18 @@ class DataFrameJoinSuite extends QueryTest with SharedSQLContext {
     checkAnswer(
       df.join(df2, Seq("int", "str"), "left_semi"),
       Row(1, "1", 2) :: Nil)
-  }
-
-  test("join - join using self join") {
-    val df = Seq(1, 2, 3).map(i => (i, i.toString)).toDF("int", "str")
-
-    // self join
-    checkAnswer(
-      df.join(df, "int"),
-      Row(1, "1", "1") :: Row(2, "2", "2") :: Row(3, "3", "3") :: Nil)
-  }
-
-  test("join - self join") {
-    val df1 = testData.select(testData("key")).as('df1)
-    val df2 = testData.select(testData("key")).as('df2)
 
     checkAnswer(
-      df1.join(df2, $"df1.key" === $"df2.key"),
-      sql("SELECT a.key, b.key FROM testData a JOIN testData b ON a.key = b.key")
-        .collect().toSeq)
+      df.join(df2, Seq("int", "str"), "semi"),
+      Row(1, "1", 2) :: Nil)
+
+    checkAnswer(
+      df.join(df2, Seq("int", "str"), "left_anti"),
+      Row(3, "3", 4) :: Nil)
+
+    checkAnswer(
+      df.join(df2, Seq("int", "str"), "anti"),
+      Row(3, "3", 4) :: Nil)
   }
 
   test("join - cross join") {
@@ -118,38 +115,6 @@ class DataFrameJoinSuite extends QueryTest with SharedSQLContext {
       df2.crossJoin(df1),
       Row(2, "2", 1, "1") :: Row(2, "2", 3, "3") ::
         Row(4, "4", 1, "1") :: Row(4, "4", 3, "3") :: Nil)
-  }
-
-  test("join - using aliases after self join") {
-    val df = Seq(1, 2, 3).map(i => (i, i.toString)).toDF("int", "str")
-    checkAnswer(
-      df.as('x).join(df.as('y), $"x.str" === $"y.str").groupBy("x.str").count(),
-      Row("1", 1) :: Row("2", 1) :: Row("3", 1) :: Nil)
-
-    checkAnswer(
-      df.as('x).join(df.as('y), $"x.str" === $"y.str").groupBy("y.str").count(),
-      Row("1", 1) :: Row("2", 1) :: Row("3", 1) :: Nil)
-  }
-
-  test("[SPARK-6231] join - self join auto resolve ambiguity") {
-    val df = Seq((1, "1"), (2, "2")).toDF("key", "value")
-    checkAnswer(
-      df.join(df, df("key") === df("key")),
-      Row(1, "1", 1, "1") :: Row(2, "2", 2, "2") :: Nil)
-
-    checkAnswer(
-      df.join(df.filter($"value" === "2"), df("key") === df("key")),
-      Row(2, "2", 2, "2") :: Nil)
-
-    checkAnswer(
-      df.join(df, df("key") === df("key") && df("value") === 1),
-      Row(1, "1", 1, "1") :: Nil)
-
-    val left = df.groupBy("key").agg(count("*"))
-    val right = df.groupBy("key").agg(sum("key"))
-    checkAnswer(
-      left.join(right, left("key") === right("key")),
-      Row(1, 1, 1, 1) :: Row(2, 1, 2, 2) :: Nil)
   }
 
   test("broadcast join hint using broadcast function") {
@@ -188,7 +153,7 @@ class DataFrameJoinSuite extends QueryTest with SharedSQLContext {
       spark.range(10e10.toLong)
         .join(spark.range(10e10.toLong).hint("broadcast"), "id")
         .queryExecution.executedPlan
-    assert(plan2.collect { case p: BroadcastHashJoinExec => p }.size == 1)
+    assert(collect(plan2) { case p: BroadcastHashJoinExec => p }.size == 1)
   }
 
   test("join - outer join conversion") {
@@ -296,15 +261,65 @@ class DataFrameJoinSuite extends QueryTest with SharedSQLContext {
     }
   }
 
-  test("NaN and -0.0 in join keys") {
-    val df1 = Seq(Float.NaN -> Double.NaN, 0.0f -> 0.0, -0.0f -> -0.0).toDF("f", "d")
-    val df2 = Seq(Float.NaN -> Double.NaN, 0.0f -> 0.0, -0.0f -> -0.0).toDF("f", "d")
-    val joined = df1.join(df2, Seq("f", "d"))
-    checkAnswer(joined, Seq(
-      Row(Float.NaN, Double.NaN),
-      Row(0.0f, 0.0),
-      Row(0.0f, 0.0),
-      Row(0.0f, 0.0),
-      Row(0.0f, 0.0)))
+  def extractLeftDeepInnerJoins(plan: LogicalPlan): Seq[LogicalPlan] = plan match {
+    case j @ Join(left, right, _: InnerLike, _, _) => right +: extractLeftDeepInnerJoins(left)
+    case Filter(_, child) => extractLeftDeepInnerJoins(child)
+    case Project(_, child) => extractLeftDeepInnerJoins(child)
+    case _ => Seq(plan)
+  }
+
+  test("SPARK-24690 enables star schema detection even if CBO disabled") {
+    withTable("r0", "r1", "r2", "r3") {
+      withTempDir { dir =>
+
+        withSQLConf(
+            SQLConf.STARSCHEMA_DETECTION.key -> "true",
+            SQLConf.CBO_ENABLED.key -> "false",
+            SQLConf.PLAN_STATS_ENABLED.key -> "true") {
+
+          val path = dir.getAbsolutePath
+
+          // Collects column statistics first
+          spark.range(300).selectExpr("id AS a", "id AS b", "id AS c")
+            .write.mode("overwrite").parquet(s"$path/r0")
+          spark.read.parquet(s"$path/r0").write.saveAsTable("r0")
+          spark.sql("ANALYZE TABLE r0 COMPUTE STATISTICS FOR COLUMNS a, b, c")
+
+          spark.range(10).selectExpr("id AS a", "id AS d")
+            .write.mode("overwrite").parquet(s"$path/r1")
+          spark.read.parquet(s"$path/r1").write.saveAsTable("r1")
+          spark.sql("ANALYZE TABLE r1 COMPUTE STATISTICS FOR COLUMNS a")
+
+          spark.range(50).selectExpr("id AS b", "id AS e")
+            .write.mode("overwrite").parquet(s"$path/r2")
+          spark.read.parquet(s"$path/r2").write.saveAsTable("r2")
+          spark.sql("ANALYZE TABLE r2 COMPUTE STATISTICS FOR COLUMNS b")
+
+          spark.range(1).selectExpr("id AS c", "id AS f")
+            .write.mode("overwrite").parquet(s"$path/r3")
+          spark.read.parquet(s"$path/r3").write.saveAsTable("r3")
+          spark.sql("ANALYZE TABLE r3 COMPUTE STATISTICS FOR COLUMNS c")
+
+          val resultDf = sql(
+            s"""SELECT * FROM r0, r1, r2, r3
+               |  WHERE
+               |    r0.a = r1.a AND
+               |    r1.d >= 3 AND
+               |    r0.b = r2.b AND
+               |    r2.e >= 5 AND
+               |    r0.c = r3.c AND
+               |    r3.f <= 100
+             """.stripMargin)
+
+          val optimized = resultDf.queryExecution.optimizedPlan
+          val optJoins = extractLeftDeepInnerJoins(optimized)
+          val joinOrder = optJoins
+            .flatMap(_.collect { case p: LogicalRelation => p.catalogTable }.head)
+            .map(_.identifier.identifier)
+
+          assert(joinOrder === Seq("r2", "r1", "r3", "r0"))
+        }
+      }
+    }
   }
 }

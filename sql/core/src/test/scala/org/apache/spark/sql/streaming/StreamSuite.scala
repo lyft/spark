@@ -19,8 +19,9 @@ package org.apache.spark.sql.streaming
 
 import java.io.{File, InterruptedIOException, IOException, UncheckedIOException}
 import java.nio.channels.ClosedByInterruptException
-import java.util.concurrent.{CountDownLatch, ExecutionException, TimeoutException, TimeUnit}
+import java.util.concurrent.{CountDownLatch, ExecutionException, TimeUnit}
 
+import scala.concurrent.TimeoutException
 import scala.reflect.ClassTag
 import scala.util.control.ControlThrowable
 
@@ -29,20 +30,21 @@ import org.apache.commons.io.FileUtils
 import org.apache.hadoop.conf.Configuration
 import org.scalatest.time.SpanSugar._
 
-import org.apache.spark.{SparkConf, SparkContext, TaskContext}
+import org.apache.spark.{SparkConf, SparkContext, TaskContext, TestUtils}
 import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.plans.logical.Range
 import org.apache.spark.sql.catalyst.streaming.InternalOutputModes
+import org.apache.spark.sql.catalyst.util.DateTimeUtils
+import org.apache.spark.sql.execution.SimpleMode
 import org.apache.spark.sql.execution.command.ExplainCommand
 import org.apache.spark.sql.execution.streaming._
-import org.apache.spark.sql.execution.streaming.continuous.ContinuousExecution
-import org.apache.spark.sql.execution.streaming.sources.ContinuousMemoryStream
+import org.apache.spark.sql.execution.streaming.sources.{ContinuousMemoryStream, MemorySink}
 import org.apache.spark.sql.execution.streaming.state.{StateStore, StateStoreConf, StateStoreId, StateStoreProvider}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.sources.StreamSourceProvider
-import org.apache.spark.sql.streaming.util.StreamManualClock
+import org.apache.spark.sql.streaming.util.{BlockOnStopSourceProvider, StreamManualClock}
 import org.apache.spark.sql.types.{IntegerType, StructField, StructType}
 import org.apache.spark.util.Utils
 
@@ -96,18 +98,16 @@ class StreamSuite extends StreamTest {
     val streamingRelation = spark.readStream.format("rate").load().logicalPlan collect {
       case s: StreamingRelationV2 => s
     }
-    assert(streamingRelation.nonEmpty, "cannot find StreamingExecutionRelation")
+    assert(streamingRelation.nonEmpty, "cannot find StreamingRelationV2")
     assert(
       streamingRelation.head.computeStats.sizeInBytes == spark.sessionState.conf.defaultSizeInBytes)
   }
 
   test("StreamingExecutionRelation.computeStats") {
-    val streamingExecutionRelation = MemoryStream[Int].toDF.logicalPlan collect {
-      case s: StreamingExecutionRelation => s
-    }
-    assert(streamingExecutionRelation.nonEmpty, "cannot find StreamingExecutionRelation")
-    assert(streamingExecutionRelation.head.computeStats.sizeInBytes
-      == spark.sessionState.conf.defaultSizeInBytes)
+    val memoryStream = MemoryStream[Int]
+    val executionRelation = StreamingExecutionRelation(
+      memoryStream, memoryStream.encoder.schema.toAttributes)(memoryStream.sqlContext.sparkSession)
+    assert(executionRelation.computeStats.sizeInBytes == spark.sessionState.conf.defaultSizeInBytes)
   }
 
   test("explain join with a normal source") {
@@ -203,7 +203,7 @@ class StreamSuite extends StreamTest {
   }
 
   test("DataFrame reuse") {
-    def assertDF(df: DataFrame) {
+    def assertDF(df: DataFrame): Unit = {
       withTempDir { outputDir =>
         withTempDir { checkpointDir =>
           val query = df.writeStream.format("parquet")
@@ -221,8 +221,12 @@ class StreamSuite extends StreamTest {
     }
 
     val df = spark.readStream.format(classOf[FakeDefaultSource].getName).load()
-    assertDF(df)
-    assertDF(df)
+    Seq("", "parquet").foreach { useV1Source =>
+      withSQLConf(SQLConf.USE_V1_SOURCE_LIST.key -> useV1Source) {
+        assertDF(df)
+        assertDF(df)
+      }
+    }
   }
 
   test("Within the same streaming query, one StreamingRelation should only be transformed to one " +
@@ -469,7 +473,7 @@ class StreamSuite extends StreamTest {
     val df = inputData.toDS().map(_ + "foo").groupBy("value").agg(count("*"))
 
     // Test `df.explain`
-    val explain = ExplainCommand(df.queryExecution.logical, extended = false)
+    val explain = ExplainCommand(df.queryExecution.logical, SimpleMode)
     val explainString =
       spark.sessionState
         .executePlan(explain)
@@ -495,9 +499,9 @@ class StreamSuite extends StreamTest {
 
       val explainWithoutExtended = q.explainInternal(false)
       // `extended = false` only displays the physical plan.
-      assert("Streaming RelationV2 MemoryStreamDataSource".r
+      assert("StreamingDataSourceV2Relation".r
         .findAllMatchIn(explainWithoutExtended).size === 0)
-      assert("ScanV2 MemoryStreamDataSource".r
+      assert("BatchScan".r
         .findAllMatchIn(explainWithoutExtended).size === 1)
       // Use "StateStoreRestore" to verify that it does output a streaming physical plan
       assert(explainWithoutExtended.contains("StateStoreRestore"))
@@ -505,9 +509,9 @@ class StreamSuite extends StreamTest {
       val explainWithExtended = q.explainInternal(true)
       // `extended = true` displays 3 logical plans (Parsed/Optimized/Optimized) and 1 physical
       // plan.
-      assert("Streaming RelationV2 MemoryStreamDataSource".r
+      assert("StreamingDataSourceV2Relation".r
         .findAllMatchIn(explainWithExtended).size === 3)
-      assert("ScanV2 MemoryStreamDataSource".r
+      assert("BatchScan".r
         .findAllMatchIn(explainWithExtended).size === 1)
       // Use "StateStoreRestore" to verify that it does output a streaming physical plan
       assert(explainWithExtended.contains("StateStoreRestore"))
@@ -521,7 +525,7 @@ class StreamSuite extends StreamTest {
     val df = inputData.toDS().map(_ * 2).filter(_ > 5)
 
     // Test `df.explain`
-    val explain = ExplainCommand(df.queryExecution.logical, extended = false)
+    val explain = ExplainCommand(df.queryExecution.logical, SimpleMode)
     val explainString =
       spark.sessionState
         .executePlan(explain)
@@ -550,17 +554,17 @@ class StreamSuite extends StreamTest {
       val explainWithoutExtended = q.explainInternal(false)
 
       // `extended = false` only displays the physical plan.
-      assert("Streaming RelationV2 ContinuousMemoryStream".r
+      assert("StreamingDataSourceV2Relation".r
         .findAllMatchIn(explainWithoutExtended).size === 0)
-      assert("ScanV2 ContinuousMemoryStream".r
+      assert("ContinuousScan".r
         .findAllMatchIn(explainWithoutExtended).size === 1)
 
       val explainWithExtended = q.explainInternal(true)
       // `extended = true` displays 3 logical plans (Parsed/Optimized/Optimized) and 1 physical
       // plan.
-      assert("Streaming RelationV2 ContinuousMemoryStream".r
+      assert("StreamingDataSourceV2Relation".r
         .findAllMatchIn(explainWithExtended).size === 3)
-      assert("ScanV2 ContinuousMemoryStream".r
+      assert("ContinuousScan".r
         .findAllMatchIn(explainWithExtended).size === 1)
     } finally {
       q.stop()
@@ -753,9 +757,9 @@ class StreamSuite extends StreamTest {
         inputData.addData(9)
         streamingQuery.processAllAvailable()
 
-        QueryTest.checkAnswer(spark.table("counts").toDF(),
-          Row("1", 1) :: Row("2", 1) :: Row("3", 2) :: Row("4", 2) ::
-          Row("5", 2) :: Row("6", 2) :: Row("7", 1) :: Row("8", 1) :: Row("9", 1) :: Nil)
+        checkAnswer(spark.table("counts").toDF(),
+          Row(1, 1L) :: Row(2, 1L) :: Row(3, 2L) :: Row(4, 2L) ::
+          Row(5, 2L) :: Row(6, 2L) :: Row(7, 1L) :: Row(8, 1L) :: Row(9, 1L) :: Nil)
       } finally {
         if (streamingQuery ne null) {
           streamingQuery.stop()
@@ -869,7 +873,7 @@ class StreamSuite extends StreamTest {
 
   testQuietly("specify custom state store provider") {
     val providerClassName = classOf[TestStateStoreProvider].getCanonicalName
-    withSQLConf("spark.sql.streaming.stateStore.providerClass" -> providerClassName) {
+    withSQLConf(SQLConf.STATE_STORE_PROVIDER_CLASS.key -> providerClassName) {
       val input = MemoryStream[Int]
       val df = input.toDS().groupBy().count()
       val query = df.writeStream.outputMode("complete").format("memory").queryName("name").start()
@@ -878,17 +882,17 @@ class StreamSuite extends StreamTest {
         query.awaitTermination()
       }
 
-      assert(e.getMessage.contains(providerClassName))
-      assert(e.getMessage.contains("instantiated"))
+      TestUtils.assertExceptionMsg(e, providerClassName)
+      TestUtils.assertExceptionMsg(e, "instantiated")
     }
   }
 
   testQuietly("custom state store provider read from offset log") {
     val input = MemoryStream[Int]
     val df = input.toDS().groupBy().count()
-    val providerConf1 = "spark.sql.streaming.stateStore.providerClass" ->
+    val providerConf1 = SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       "org.apache.spark.sql.execution.streaming.state.HDFSBackedStateStoreProvider"
-    val providerConf2 = "spark.sql.streaming.stateStore.providerClass" ->
+    val providerConf2 = SQLConf.STATE_STORE_PROVIDER_CLASS.key ->
       classOf[TestStateStoreProvider].getCanonicalName
 
     def runQuery(queryName: String, checkpointLoc: String): Unit = {
@@ -1082,6 +1086,77 @@ class StreamSuite extends StreamTest {
       assert(query.exception.isEmpty)
     }
   }
+
+  test("SPARK-26379 Structured Streaming - Exception on adding current_timestamp " +
+    " to Dataset - use v2 sink") {
+    testCurrentTimestampOnStreamingQuery()
+  }
+
+  test("SPARK-26379 Structured Streaming - Exception on adding current_timestamp " +
+    " to Dataset - use v1 sink") {
+    testCurrentTimestampOnStreamingQuery()
+  }
+
+  private def testCurrentTimestampOnStreamingQuery(): Unit = {
+    val input = MemoryStream[Int]
+    val df = input.toDS().withColumn("cur_timestamp", lit(current_timestamp()))
+
+    def assertBatchOutputAndUpdateLastTimestamp(
+        rows: Seq[Row],
+        curTimestamp: Long,
+        curDate: Int,
+        expectedValue: Int): Long = {
+      assert(rows.size === 1)
+      val row = rows.head
+      assert(row.getInt(0) === expectedValue)
+      assert(row.getTimestamp(1).getTime >= curTimestamp)
+      row.getTimestamp(1).getTime
+    }
+
+    var lastTimestamp = System.currentTimeMillis()
+    val currentDate = DateTimeUtils.millisToDays(lastTimestamp)
+    testStream(df) (
+      AddData(input, 1),
+      CheckLastBatch { rows: Seq[Row] =>
+        lastTimestamp = assertBatchOutputAndUpdateLastTimestamp(rows, lastTimestamp, currentDate, 1)
+      },
+      Execute { _ => Thread.sleep(1000) },
+      AddData(input, 2),
+      CheckLastBatch { rows: Seq[Row] =>
+        lastTimestamp = assertBatchOutputAndUpdateLastTimestamp(rows, lastTimestamp, currentDate, 2)
+      }
+    )
+  }
+
+  // ProcessingTime trigger generates MicroBatchExecution, and ContinuousTrigger starts a
+  // ContinuousExecution
+  Seq(Trigger.ProcessingTime("1 second"), Trigger.Continuous("1 second")).foreach { trigger =>
+    test(s"SPARK-30143: stop waits until timeout if blocked - trigger: $trigger") {
+      BlockOnStopSourceProvider.enableBlocking()
+      val sq = spark.readStream.format(classOf[BlockOnStopSourceProvider].getName)
+        .load()
+        .writeStream
+        .format("console")
+        .trigger(trigger)
+        .start()
+      failAfter(60.seconds) {
+        val startTime = System.nanoTime()
+        withSQLConf(SQLConf.STREAMING_STOP_TIMEOUT.key -> "2000") {
+          intercept[TimeoutException] {
+            sq.stop()
+          }
+        }
+        val duration = (System.nanoTime() - startTime) / 1e6
+        assert(duration >= 2000,
+          s"Should have waited more than 2000 millis, but waited $duration millis")
+
+        BlockOnStopSourceProvider.disableBlocking()
+        withSQLConf(SQLConf.STREAMING_STOP_TIMEOUT.key -> "0") {
+          sq.stop()
+        }
+      }
+    }
+  }
 }
 
 abstract class FakeSource extends StreamSourceProvider {
@@ -1132,7 +1207,7 @@ class FakeDefaultSource extends FakeSource {
         ds.toDF("a")
       }
 
-      override def stop() {}
+      override def stop(): Unit = {}
     }
   }
 }

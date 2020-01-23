@@ -39,7 +39,7 @@ private[sql] class JsonInferSchema(options: JSONOptions) extends Serializable {
 
   private val timestampFormatter = TimestampFormatter(
     options.timestampFormat,
-    options.timeZone,
+    options.zoneId,
     options.locale)
 
   /**
@@ -57,8 +57,7 @@ private[sql] class JsonInferSchema(options: JSONOptions) extends Serializable {
     // In each RDD partition, perform schema inference on each row and merge afterwards.
     val typeMerger = JsonInferSchema.compatibleRootType(columnNameOfCorruptRecord, parseMode)
     val mergedTypesFromPartitions = json.mapPartitions { iter =>
-      val factory = new JsonFactory()
-      options.setJacksonOptions(factory)
+      val factory = options.buildJsonFactory()
       iter.flatMap { row =>
         try {
           Utils.tryWithResource(createParser(factory, row)) { parser =>
@@ -122,7 +121,7 @@ private[sql] class JsonInferSchema(options: JSONOptions) extends Serializable {
 
       case VALUE_STRING =>
         val field = parser.getText
-        val decimalTry = allCatch opt {
+        lazy val decimalTry = allCatch opt {
           val bigDecimal = decimalParser(field)
             DecimalType(bigDecimal.precision, bigDecimal.scale)
         }
