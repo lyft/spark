@@ -17,10 +17,11 @@
 
 package org.apache.spark.sql.execution
 
+import java.util.concurrent.{Future => JFuture}
 import java.util.concurrent.TimeUnit._
 
 import scala.collection.mutable
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{ExecutionContext}
 import scala.concurrent.duration.Duration
 
 import org.apache.spark.{InterruptibleIterator, Partition, SparkContext, TaskContext}
@@ -38,7 +39,7 @@ import org.apache.spark.util.random.{BernoulliCellSampler, PoissonSampler}
 
 /** Physical plan for Project. */
 case class ProjectExec(projectList: Seq[NamedExpression], child: SparkPlan)
-  extends UnaryExecNode with CodegenSupport {
+  extends UnaryExecNode with CodegenSupport with AliasAwareOutputPartitioning {
 
   override def output: Seq[Attribute] = projectList.map(_.toAttribute)
 
@@ -81,7 +82,7 @@ case class ProjectExec(projectList: Seq[NamedExpression], child: SparkPlan)
 
   override def outputOrdering: Seq[SortOrder] = child.outputOrdering
 
-  override def outputPartitioning: Partitioning = child.outputPartitioning
+  override protected def outputExpressions: Seq[NamedExpression] = projectList
 
   override def verboseStringWithOperatorId(): String = {
     s"""
@@ -91,7 +92,6 @@ case class ProjectExec(projectList: Seq[NamedExpression], child: SparkPlan)
      """.stripMargin
   }
 }
-
 
 /** Physical plan for Filter. */
 case class FilterExec(condition: Expression, child: SparkPlan)
@@ -747,7 +747,7 @@ case class SubqueryExec(name: String, child: SparkPlan)
     "collectTime" -> SQLMetrics.createTimingMetric(sparkContext, "time to collect"))
 
   @transient
-  private lazy val relationFuture: Future[Array[InternalRow]] = {
+  private lazy val relationFuture: JFuture[Array[InternalRow]] = {
     // relationFuture is used in "doExecute". Therefore we can get the execution id correctly here.
     val executionId = sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY)
     SQLExecution.withThreadLocalCaptured[Array[InternalRow]](
