@@ -31,6 +31,20 @@ import org.apache.spark.shuffle.IndexShuffleBlockResolver.NOOP_REDUCE_ID
 import org.apache.spark.storage._
 import org.apache.spark.util.Utils
 
+import com.amazonaws.AmazonClientException
+import com.amazonaws.AmazonServiceException
+import com.amazonaws.regions.Region
+import com.amazonaws.regions.Regions
+import com.amazonaws.services.s3.AmazonS3
+import com.amazonaws.services.s3.AmazonS3Client
+import com.amazonaws.services.s3.model.Bucket
+import com.amazonaws.services.s3.model.GetObjectRequest
+import com.amazonaws.services.s3.model.ListObjectsRequest
+import com.amazonaws.services.s3.model.ObjectListing
+import com.amazonaws.services.s3.model.PutObjectRequest
+import com.amazonaws.services.s3.model.S3Object
+import com.amazonaws.services.s3.model.S3ObjectSummary
+
 /**
  * Create and maintain the shuffle blocks' mapping between logic block and physical file location.
  * Data of shuffle blocks from the same map task are stored in a single consolidated data file.
@@ -200,6 +214,102 @@ private[spark] class IndexShuffleBlockResolver(
           if (dataFile.exists()) {
             dataFile.delete()
           }
+          if (!indexTmp.renameTo(indexFile)) {
+            throw new IOException("fail to rename file " + indexTmp + " to " + indexFile)
+          }
+          if (dataTmp != null && dataTmp.exists() && !dataTmp.renameTo(dataFile)) {
+            throw new IOException("fail to rename file " + dataTmp + " to " + dataFile)
+          }
+        }
+      }
+    } finally {
+      if (indexTmp.exists() && !indexTmp.delete()) {
+        logError(s"Failed to delete temporary index file at ${indexTmp.getAbsolutePath}")
+      }
+    }
+  }
+
+  /**
+   * Write an index file with the offsets of each block, plus a final offset at the end for the
+   * end of the output file. This will be used by getBlockData to figure out where each block
+   * begins and ends.
+   *
+   * It will commit the data and index file as an atomic operation, use the existing ones, or
+   * replace them with new ones. This method will write the final file to S3
+   *
+   * Note: the `lengths` will be updated to match the existing index file if use the existing ones.
+   */
+  def writeS3IndexFileAndCommit(
+                               s3Client: AmazonS3,
+                               appId: String,
+                               shuffleId: Int,
+                               mapId: Long,
+                               lengths: Array[Long],
+                               dataTmp: File): Unit = {
+    val indexFile = getIndexFile(shuffleId, mapId)
+    val indexTmp = Utils.tempFileWith(indexFile)
+    try {
+      val dataFile = getDataFile(shuffleId, mapId)
+      // There is only one IndexShuffleBlockResolver per executor, this synchronization make sure
+      // the following check and rename are atomic.
+      synchronized {
+        val existingLengths = checkIndexAndDataFile(indexFile, dataFile, lengths.length)
+        if (existingLengths != null) {
+          // Another attempt for the same task has already written our map outputs successfully,
+          // so just use the existing partition lengths and delete our temporary map outputs.
+          System.arraycopy(existingLengths, 0, lengths, 0, lengths.length)
+          if (dataTmp != null && dataTmp.exists()) {
+            dataTmp.delete()
+          }
+        } else {
+          // This is the first successful attempt in writing the map outputs for this task,
+          // so override any existing index and data files with the ones we wrote.
+          val out = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(indexTmp)))
+          Utils.tryWithSafeFinally {
+            // We take in lengths of each block, need to convert it to offsets.
+            var offset = 0L
+            out.writeLong(offset)
+            for (length <- lengths) {
+              offset += length
+              out.writeLong(offset)
+            }
+          } {
+            out.close()
+          }
+
+          // Writing new index file to to S3 with awen/appId/subdir/name path
+          val indexAbsolutePath: String = indexFile.getAbsolutePath()
+          val indexPathSplit: Array[String] = indexAbsolutePath.split("/")
+          val indexSubdir: String = indexPathSplit(indexPathSplit.length - 2)
+
+          val bucketName: String = "data-team"
+          val indexS3key: String = "awen/" + appId + "/"
+          indexSubdir + "/" + indexFile.getName()
+          s3Client.putObject(new PutObjectRequest(bucketName, indexS3key, indexFile))
+
+          if (indexFile.exists()) {
+            indexFile.delete()
+          }
+
+          // Writing new data file to to S3 with its absolute path as key
+          val dataAbsolutePath: String = dataFile.getAbsolutePath()
+          val dataPathSplit: Array[String] = dataAbsolutePath.split("/")
+          val dataSubdir: String = dataPathSplit(dataPathSplit.length - 2)
+
+          val dataS3key: String = "awen/" + appId + "/" +
+            dataSubdir + "/" + dataFile.getName()
+
+          try {
+            s3Client.putObject(new PutObjectRequest(bucketName, dataS3key, dataFile))
+          } catch {
+            case ace: AmazonClientException => logError("Caught an AmazonClientException")
+          }
+
+
+          if (dataFile.exists()) {
+            dataFile.delete()
+          }
+
           if (!indexTmp.renameTo(indexFile)) {
             throw new IOException("fail to rename file " + indexTmp + " to " + indexFile)
           }
