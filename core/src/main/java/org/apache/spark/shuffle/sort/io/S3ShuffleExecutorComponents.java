@@ -48,6 +48,7 @@ public class S3ShuffleExecutorComponents implements ShuffleExecutorComponents {
     this.sparkConf = sparkConf;
 
     // Initialize S3 instance
+    s3Client = new AmazonS3Client();
     Region region = Region.getRegion(Regions.US_EAST_1);
     s3Client.setRegion(region);
   }
