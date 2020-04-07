@@ -58,14 +58,14 @@ public class S3ShuffleDriverComponents implements ShuffleDriverComponents {
     // Initialize S3 instance
     Region region = Region.getRegion(Regions.US_EAST_1);
     s3Client.setRegion(region);
-    s3Key = "awen/" + sparkConf.getAppId();
+    // s3Key = "awen/" + sparkConf.getAppId();
 
     // Set up file path for subdirectors in S3
-    try {
-      s3Client.putObject(new PutObjectRequest(s3Bucket, s3Key, File.createTempFile("temp", null)));
-    } catch (IOException e) {
-      e.printStackTrace();
-    }
+//    try {
+//      s3Client.putObject(new PutObjectRequest(s3Bucket, s3Key, File.createTempFile("temp", null)));
+//    } catch (IOException e) {
+//      e.printStackTrace();
+//    }
 
     return Collections.emptyMap();
   }
@@ -73,6 +73,7 @@ public class S3ShuffleDriverComponents implements ShuffleDriverComponents {
   @Override
   public void cleanupApplication() {
     // Clean up S3 subdirectory
+    s3Key = "awen/" + sparkConf.getAppId(); // Can't access app ID in initialize
     s3Client.deleteObject(new DeleteObjectRequest(s3Bucket, s3Key));
   }
 
