@@ -93,6 +93,7 @@
     <module>mllib</module>
     <module>mllib-local</module>
     <module>tools</module>
+    <module>shuffle</module>
     <module>streaming</module>
     <module>sql/catalyst</module>
     <module>sql/core</module>
