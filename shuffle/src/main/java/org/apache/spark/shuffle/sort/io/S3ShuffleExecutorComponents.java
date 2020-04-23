@@ -4,7 +4,6 @@ import com.google.common.annotations.VisibleForTesting;
 import org.apache.spark.SparkConf;
 import org.apache.spark.SparkEnv;
 import org.apache.spark.shuffle.S3IndexShuffleBlockResolver;
-import org.apache.spark.shuffle.io.S3ShuffleReadSupport;
 import org.apache.spark.shuffle.api.*;
 import org.apache.spark.storage.BlockManager;
 import org.apache.spark.MapOutputTracker;
@@ -27,7 +26,6 @@ import com.amazonaws.services.s3.model.S3ObjectSummary;
 public class S3ShuffleExecutorComponents implements ShuffleExecutorComponents {
 
     private final SparkConf sparkConf;
-    private S3ShuffleReadSupport shuffleReadSupport; // From local disk read patch
     private BlockManager blockManager;
     private S3IndexShuffleBlockResolver blockResolver;
 
@@ -47,12 +45,10 @@ public class S3ShuffleExecutorComponents implements ShuffleExecutorComponents {
     public S3ShuffleExecutorComponents(
             SparkConf sparkConf,
             BlockManager blockManager,
-            S3IndexShuffleBlockResolver blockResolver,
-            S3ShuffleReadSupport shuffleReadSupport) {
+            S3IndexShuffleBlockResolver blockResolver) {
         this.sparkConf = sparkConf;
         this.blockManager = blockManager;
         this.blockResolver = blockResolver;
-        this.shuffleReadSupport = shuffleReadSupport;
 
         // Initialize S3 instance
         Regions region = Regions.fromName("us-east-1");
@@ -73,8 +69,6 @@ public class S3ShuffleExecutorComponents implements ShuffleExecutorComponents {
 
         MapOutputTracker mapOutputTracker = SparkEnv.get().mapOutputTracker();
         SerializerManager serializerManager = SparkEnv.get().serializerManager();
-        shuffleReadSupport = new S3ShuffleReadSupport(
-                blockManager, mapOutputTracker, serializerManager, sparkConf);
     }
 
     @Override
