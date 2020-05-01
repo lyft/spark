@@ -23,8 +23,8 @@ import org.apache.spark.shuffle.api.ShuffleDriverComponents;
 import org.apache.spark.shuffle.api.ShuffleExecutorComponents;
 
 /**
- * Implementation of the {@link ShuffleDataIO} plugin system that replicates the local shuffle
- * storage and index file functionality that has historically been used from Spark 2.4 and earlier.
+ * Implementation of the {@link ShuffleDataIO} plugin system that moves the local shuffle
+ * storage and index file functionality from local disk to S3 cloud storage.
  */
 public class S3ShuffleDataIO implements ShuffleDataIO {
 
@@ -41,6 +41,7 @@ public class S3ShuffleDataIO implements ShuffleDataIO {
 
   @Override
   public ShuffleDriverComponents driver() {
+    // return new S3ShuffleDriverComponents(sparkConf, uuid);
     return new S3ShuffleDriverComponents(sparkConf);
   }
 }

@@ -20,10 +20,9 @@ package org.apache.spark.shuffle.sort.io;
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.spark.SparkConf;
 import org.apache.spark.SparkEnv;
-import org.apache.spark.shuffle.IndexShuffleBlockResolver;
-import org.apache.spark.shuffle.api.ShuffleExecutorComponents;
-import org.apache.spark.shuffle.api.ShuffleMapOutputWriter;
-import org.apache.spark.shuffle.api.SingleSpillShuffleMapOutputWriter;
+import org.apache.spark.internal.config.package$;
+import org.apache.spark.shuffle.S3IndexShuffleBlockResolver;
+import org.apache.spark.shuffle.api.*;
 import org.apache.spark.storage.BlockManager;
 
 import java.util.Map;
@@ -35,52 +34,62 @@ import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.ListObjectsV2Request;
+import com.amazonaws.services.s3.model.ListObjectsV2Result;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 public class S3ShuffleExecutorComponents implements ShuffleExecutorComponents {
 
   private final SparkConf sparkConf;
   private BlockManager blockManager;
-  private IndexShuffleBlockResolver blockResolver;
+  private S3IndexShuffleBlockResolver blockResolver;
 
   private AmazonS3 s3Client;
+  private String shuffleUUID;
 
+  // Receive UUID from driver in sparkConf
   public S3ShuffleExecutorComponents(SparkConf sparkConf) {
     this.sparkConf = sparkConf;
 
     // Initialize S3 instance
-    s3Client = new AmazonS3Client();
-    Region region = Region.getRegion(Regions.US_EAST_1);
-    s3Client.setRegion(region);
+    Regions region = Regions.fromName(sparkConf.get(package$.MODULE$.SHUFFLE_S3_REGION_CODE()));
+    s3Client = AmazonS3ClientBuilder.standard().withRegion(region).build();
   }
 
   @VisibleForTesting
   public S3ShuffleExecutorComponents(
-      SparkConf sparkConf,
-      BlockManager blockManager,
-      IndexShuffleBlockResolver blockResolver) {
+          SparkConf sparkConf,
+          BlockManager blockManager,
+          S3IndexShuffleBlockResolver blockResolver) {
     this.sparkConf = sparkConf;
     this.blockManager = blockManager;
     this.blockResolver = blockResolver;
 
     // Initialize S3 instance
-    Region region = Region.getRegion(Regions.US_EAST_1);
-    s3Client.setRegion(region);
+    Regions region = Regions.fromName(sparkConf.get(package$.MODULE$.SHUFFLE_S3_REGION_CODE()));
+    s3Client = AmazonS3ClientBuilder.standard().withRegion(region).build();
   }
 
   @Override
   public void initializeExecutor(String appId, String execId, Map<String, String> extraConfigs) {
+
+    // Get value of shuffle UUID from extraConfigs here
+    this.shuffleUUID = extraConfigs.get("shuffleUUID");
+
     blockManager = SparkEnv.get().blockManager();
     if (blockManager == null) {
       throw new IllegalStateException("No blockManager available from the SparkEnv.");
     }
-    blockResolver = new IndexShuffleBlockResolver(sparkConf, blockManager);
+    blockResolver = new S3IndexShuffleBlockResolver(sparkConf, blockManager);
+
   }
 
   @Override
   public ShuffleMapOutputWriter createMapOutputWriter(
-      int shuffleId,
-      long mapTaskId,
-      int numPartitions) {
+          int shuffleId,
+          long mapTaskId,
+          int numPartitions) {
 
     return createMapOutputWriter(s3Client, shuffleId, mapTaskId, numPartitions);
   }
@@ -92,17 +101,17 @@ public class S3ShuffleExecutorComponents implements ShuffleExecutorComponents {
               "Executor components must be initialized before getting writers.");
     }
     return new S3ShuffleMapOutputWriter(
-            s3Client, shuffleId, mapTaskId, numPartitions, blockResolver, sparkConf);
+            s3Client, sparkConf, shuffleId, mapTaskId, numPartitions, blockResolver, shuffleUUID);
   }
 
   @Override
   public Optional<SingleSpillShuffleMapOutputWriter> createSingleFileMapOutputWriter(
-      int shuffleId,
-      long mapId) {
+          int shuffleId,
+          long mapId) {
     if (blockResolver == null) {
       throw new IllegalStateException(
-          "Executor components must be initialized before getting writers.");
+              "Executor components must be initialized before getting writers.");
     }
-    return Optional.of(new LocalDiskSingleSpillMapOutputWriter(shuffleId, mapId, blockResolver));
+    return Optional.of(new S3SingleSpillMapOutputWriter(shuffleId, mapId, blockResolver));
   }
 }

@@ -20,6 +20,7 @@ package org.apache.spark.shuffle.sort.io;
 import org.apache.spark.SparkConf;
 import org.apache.spark.internal.config.package$;
 import org.apache.spark.shuffle.IndexShuffleBlockResolver;
+import org.apache.spark.shuffle.S3IndexShuffleBlockResolver;
 import org.apache.spark.shuffle.api.ShuffleMapOutputWriter;
 import org.apache.spark.shuffle.api.ShufflePartitionWriter;
 import org.apache.spark.shuffle.api.WritableByteChannelWrapper;
@@ -40,18 +41,18 @@ import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
 
 /**
- * Implementation of {@link ShuffleMapOutputWriter} that replicates the functionality of shuffle
- * persisting shuffle data to local disk alongside index files, identical to Spark's historic
- * canonical shuffle storage mechanism.
+ * Implementation of {@link ShuffleMapOutputWriter} that moves the functionality of shuffle
+ * persisting shuffle data to Amazon S3 alongside index files instead of Spark's historic
+ * canonical shuffle storage mechanism on local disk.
  */
 public class S3ShuffleMapOutputWriter implements ShuffleMapOutputWriter {
 
   private static final Logger log =
-    LoggerFactory.getLogger(S3ShuffleMapOutputWriter.class);
+          LoggerFactory.getLogger(S3ShuffleMapOutputWriter.class);
 
   private final int shuffleId;
   private final long mapId;
-  private final IndexShuffleBlockResolver blockResolver;
+  private final S3IndexShuffleBlockResolver blockResolver;
   private final long[] partitionLengths;
   private final int bufferSize;
   private int lastPartitionId = -1;
@@ -66,25 +67,28 @@ public class S3ShuffleMapOutputWriter implements ShuffleMapOutputWriter {
 
   SparkConf sparkConf;
   private final AmazonS3 s3Client;
+  private final String shuffleUUID;
 
   public S3ShuffleMapOutputWriter(
-      AmazonS3 s3Client,
-      int shuffleId,
-      long mapId,
-      int numPartitions,
-      IndexShuffleBlockResolver blockResolver,
-      SparkConf sparkConf) {
+          AmazonS3 s3Client,
+          SparkConf sparkConf,
+          int shuffleId,
+          long mapId,
+          int numPartitions,
+          S3IndexShuffleBlockResolver blockResolver,
+          String shuffleUUID) {
     this.shuffleId = shuffleId;
     this.mapId = mapId;
     this.blockResolver = blockResolver;
     this.bufferSize =
-      (int) (long) sparkConf.get(
-        package$.MODULE$.SHUFFLE_UNSAFE_FILE_OUTPUT_BUFFER_SIZE()) * 1024;
+            (int) (long) sparkConf.get(
+                    package$.MODULE$.SHUFFLE_UNSAFE_FILE_OUTPUT_BUFFER_SIZE()) * 1024;
     this.partitionLengths = new long[numPartitions];
     this.outputFile = blockResolver.getDataFile(shuffleId, mapId);
     this.outputTempFile = null;
     this.s3Client = s3Client;
     this.sparkConf = sparkConf;
+    this.shuffleUUID = shuffleUUID;
   }
 
   @Override
@@ -112,17 +116,16 @@ public class S3ShuffleMapOutputWriter implements ShuffleMapOutputWriter {
     // https://bugs.openjdk.java.net/browse/JDK-7052359 and SPARK-3948.
     if (outputFileChannel != null && outputFileChannel.position() != bytesWrittenToMergedFile) {
       throw new IOException(
-          "Current position " + outputFileChannel.position() + " does not equal expected " +
-              "position " + bytesWrittenToMergedFile + " after transferTo. Please check your " +
-              " kernel version to see if it is 2.6.32, as there is a kernel bug which will lead " +
-              "to unexpected behavior when using transferTo. You can set " +
-              "spark.file.transferTo=false to disable this NIO feature.");
+              "Current position " + outputFileChannel.position() + " does not equal expected " +
+                      "position " + bytesWrittenToMergedFile + " after transferTo. Please check your " +
+                      " kernel version to see if it is 2.6.32, as there is a kernel bug which will lead " +
+                      "to unexpected behavior when using transferTo. You can set " +
+                      "spark.file.transferTo=false to disable this NIO feature.");
     }
     cleanUp();
     File resolvedTmp = outputTempFile != null && outputTempFile.isFile() ? outputTempFile : null;
 
-    // Change to S3WriteIndexFileAndCommit?
-    blockResolver.writeS3IndexFileAndCommit(s3Client, sparkConf.getAppId(),
+    blockResolver.writeS3IndexFileAndCommit(s3Client, shuffleUUID,
             shuffleId, mapId, partitionLengths, resolvedTmp);
 
     return partitionLengths;
@@ -180,8 +183,8 @@ public class S3ShuffleMapOutputWriter implements ShuffleMapOutputWriter {
       if (partStream == null) {
         if (outputFileChannel != null) {
           throw new IllegalStateException("Requested an output channel for a previous write but" +
-              " now an output stream has been requested. Should not be using both channels" +
-              " and streams to write.");
+                  " now an output stream has been requested. Should not be using both channels" +
+                  " and streams to write.");
         }
         initStream();
         partStream = new PartitionWriterStream(partitionId);
@@ -194,8 +197,8 @@ public class S3ShuffleMapOutputWriter implements ShuffleMapOutputWriter {
       if (partChannel == null) {
         if (partStream != null) {
           throw new IllegalStateException("Requested an output stream for a previous write but" +
-              " now an output channel has been requested. Should not be using both channels" +
-              " and streams to write.");
+                  " now an output channel has been requested. Should not be using both channels" +
+                  " and streams to write.");
         }
         initChannel();
         partChannel = new PartitionWriterChannel(partitionId);

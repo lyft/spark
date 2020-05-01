@@ -926,6 +926,24 @@ package object config {
       .stringConf
       .createWithDefault(classOf[LocalDiskShuffleDataIO].getName)
 
+  private[spark] val SHUFFLE_S3_BUCKET_NAME =
+    ConfigBuilder("spark.shuffle.sort.io.s3BucketName")
+      .doc("Intended S3 bucket for shuffle file backup.")
+      .stringConf
+      .createWithDefault("data-team")
+
+  private[spark] val SHUFFLE_S3_REGION_CODE =
+    ConfigBuilder("spark.shuffle.sort.io.s3RegionCode")
+      .doc("Intended AWS Region for bucket, eg. us-east-1.")
+      .stringConf
+      .createWithDefault("us-east-1")
+
+  private[spark] val SHUFFLE_S3_PREFIX =
+    ConfigBuilder("spark.shuffle.sort.io.s3Prefix")
+      .doc("Intended prefix for shuffle file path, including final /.")
+      .stringConf
+      .createWithDefault("spark-shuffle-poc/")
+
   private[spark] val SHUFFLE_FILE_BUFFER_SIZE =
     ConfigBuilder("spark.shuffle.file.buffer")
       .doc("Size of the in-memory buffer for each shuffle file output stream, in KiB unless " +
