@@ -296,7 +296,7 @@ private[spark] class S3IndexShuffleBlockResolver(
             indexSubdir + "/" + indexFile.getName()
           try {
             s3Client.putObject(s3Bucket, indexS3key, indexFile)
-            logInfo(s"Successfully wrote " + indexFile.getName() + " to S3 at " + indexS3key);
+            logDebug(s"Successfully wrote " + indexFile.getName() + " to S3 at " + indexS3key);
           } catch {
             case ase: AmazonServiceException => logError(ase.getErrorMessage())
             case ace: AmazonClientException => logError(ace.getMessage())
@@ -312,7 +312,7 @@ private[spark] class S3IndexShuffleBlockResolver(
 
           try {
             s3Client.putObject(s3Bucket, dataS3key, dataFile)
-            logInfo(s"Successfully wrote " + dataFile.getName() + " to S3 at " + dataS3key)
+            logDebug(s"Successfully wrote " + dataFile.getName() + " to S3 at " + dataS3key)
           } catch {
             case ase: AmazonServiceException => logError(ase.getErrorMessage())
             case ace: AmazonClientException => logError(ace.getMessage())
