@@ -28,16 +28,12 @@ import org.apache.spark.storage.BlockManager;
 import java.util.Map;
 import java.util.Optional;
 
-import com.amazonaws.AmazonClientException;
-import com.amazonaws.AmazonServiceException;
-import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import com.amazonaws.services.s3.model.ListObjectsV2Request;
-import com.amazonaws.services.s3.model.ListObjectsV2Result;
-import com.amazonaws.services.s3.model.S3ObjectSummary;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class S3ShuffleExecutorComponents implements ShuffleExecutorComponents {
 
@@ -47,8 +43,8 @@ public class S3ShuffleExecutorComponents implements ShuffleExecutorComponents {
 
   private AmazonS3 s3Client;
   private String shuffleUUID;
+  private static final Logger logger = LoggerFactory.getLogger(S3ShuffleExecutorComponents.class);
 
-  // Receive UUID from driver in sparkConf
   public S3ShuffleExecutorComponents(SparkConf sparkConf) {
     this.sparkConf = sparkConf;
 
@@ -75,7 +71,8 @@ public class S3ShuffleExecutorComponents implements ShuffleExecutorComponents {
   public void initializeExecutor(String appId, String execId, Map<String, String> extraConfigs) {
 
     // Get value of shuffle UUID from extraConfigs here
-    this.shuffleUUID = extraConfigs.get("shuffleUUID");
+    shuffleUUID = extraConfigs.get("shuffleUUID");
+    logger.info("App ID: " + sparkConf.getAppId() + "; S3 UUID: " + shuffleUUID);
 
     blockManager = SparkEnv.get().blockManager();
     if (blockManager == null) {

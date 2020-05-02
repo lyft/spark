@@ -32,15 +32,12 @@ import java.util.UUID;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
-import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
-import com.amazonaws.services.s3.model.ListObjectsV2Request;
-import com.amazonaws.services.s3.model.ListObjectsV2Result;
-import com.amazonaws.services.s3.model.S3ObjectSummary;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.apache.spark.internal.config.package$;
 
@@ -53,6 +50,7 @@ public class S3ShuffleDriverComponents implements ShuffleDriverComponents {
   private String s3KeyPrefix;
   private String s3RegionCode;
   private final String shuffleUUID ; // Subdirectory in S3 for this job's shuffle files
+  private static final Logger logger = LoggerFactory.getLogger(S3ShuffleDriverComponents.class);
 
   public S3ShuffleDriverComponents(SparkConf sparkConf) {
     this.sparkConf = sparkConf;
@@ -89,11 +87,13 @@ public class S3ShuffleDriverComponents implements ShuffleDriverComponents {
       System.exit(1); // Immediately exit if permissions are not granted
     } catch (AmazonServiceException e) {
       System.err.println(e.getErrorMessage());
+    } catch (AmazonClientException e) {
+      System.err.println(e.getMessage());
     }
 
     file.deleteOnExit();
 
-    System.out.println("Driver wrote to S3 at folder " + s3KeyPrefix);
+    logger.debug("Driver wrote to S3 in bucket " + s3Bucket + " at prefix " + s3KeyPrefix);
 
     // Create Map to populate SparkConf with shuffle UUID for executors
     Map<String, String> uuidConfig = new HashMap<>();

@@ -19,7 +19,6 @@ package org.apache.spark.shuffle.sort.io;
 
 import org.apache.spark.SparkConf;
 import org.apache.spark.internal.config.package$;
-import org.apache.spark.shuffle.IndexShuffleBlockResolver;
 import org.apache.spark.shuffle.S3IndexShuffleBlockResolver;
 import org.apache.spark.shuffle.api.ShuffleMapOutputWriter;
 import org.apache.spark.shuffle.api.ShufflePartitionWriter;
@@ -33,12 +32,7 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
 import java.util.Optional;
 
-import com.amazonaws.AmazonClientException;
-import com.amazonaws.AmazonServiceException;
-import com.amazonaws.regions.Region;
-import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3Client;
 
 /**
  * Implementation of {@link ShuffleMapOutputWriter} that moves the functionality of shuffle
