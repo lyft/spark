@@ -49,8 +49,16 @@ private[spark] class BasicExecutorFeatureStep(
     kubernetesConf.sparkConf.getInt("spark.driver.port", DEFAULT_DRIVER_PORT),
     CoarseGrainedSchedulerBackend.ENDPOINT_NAME).toString
   private val executorMemoryMiB = kubernetesConf.get(EXECUTOR_MEMORY)
+  private val executorOffHeapMiB = kubernetesConf.getOption("spark.memory.offHeap.size")
+    .getOrElse("0")
   private val executorMemoryString = kubernetesConf.get(
     EXECUTOR_MEMORY.key, EXECUTOR_MEMORY.defaultValueString)
+  private val executorMemoryFactor = kubernetesConf
+    .sparkConf.getDouble("spark.executor.memory.factor", 1f)
+  private val executorCoresFactor = kubernetesConf
+    .sparkConf.getDouble("spark.executor.cores.factor", 1f)
+  private val executorMemoryLimitFactor = kubernetesConf
+    .sparkConf.getDouble("spark.executor.memory.limit.factor", 1f)
 
   private val memoryOverheadMiB = kubernetesConf
     .get(EXECUTOR_MEMORY_OVERHEAD)
@@ -58,7 +66,7 @@ private[spark] class BasicExecutorFeatureStep(
       (kubernetesConf.get(MEMORY_OVERHEAD_FACTOR) * executorMemoryMiB).toInt,
       MEMORY_OVERHEAD_MIN_MIB))
   private val executorMemoryWithOverhead = executorMemoryMiB + memoryOverheadMiB
-  private val executorMemoryTotal = kubernetesConf.sparkConf
+  private var executorMemoryTotal = kubernetesConf.sparkConf
     .getOption(APP_RESOURCE_TYPE.key).map{ res =>
       val additionalPySparkMemory = res match {
         case "python" =>
@@ -69,13 +77,20 @@ private[spark] class BasicExecutorFeatureStep(
     executorMemoryWithOverhead + additionalPySparkMemory
   }.getOrElse(executorMemoryWithOverhead)
 
+  executorMemoryTotal += Utils.memoryStringToMb(executorOffHeapMiB)
+  executorMemoryTotal = (executorMemoryTotal.toDouble * executorMemoryFactor).toLong
+  println(s"Executor memory before $executorMemoryTotal")
+
+  private val executorTotalMemoryLimit = (executorMemoryTotal * executorMemoryLimitFactor).toInt
+  println(s"Executor memory after $executorMemoryTotal limit $executorTotalMemoryLimit")
   private val executorCores = kubernetesConf.sparkConf.getInt("spark.executor.cores", 1)
-  private val executorCoresRequest =
+  private var executorCoresRequest =
     if (kubernetesConf.sparkConf.contains(KUBERNETES_EXECUTOR_REQUEST_CORES)) {
-      kubernetesConf.get(KUBERNETES_EXECUTOR_REQUEST_CORES).get
+      kubernetesConf.get(KUBERNETES_EXECUTOR_REQUEST_CORES).get.toDouble
     } else {
-      executorCores.toString
+      executorCores.toDouble
     }
+  executorCoresRequest *= executorCoresFactor
   private val executorLimitCores = kubernetesConf.get(KUBERNETES_EXECUTOR_LIMIT_CORES)
 
   override def configurePod(pod: SparkPod): SparkPod = {
@@ -88,8 +103,13 @@ private[spark] class BasicExecutorFeatureStep(
     val executorMemoryQuantity = new QuantityBuilder(false)
       .withAmount(s"${executorMemoryTotal}Mi")
       .build()
+
+    val executorMemoryLimit = new QuantityBuilder(false)
+      .withAmount(s"${executorTotalMemoryLimit}Mi")
+      .build()
+
     val executorCpuQuantity = new QuantityBuilder(false)
-      .withAmount(executorCoresRequest)
+      .withAmount(executorCoresRequest.toString)
       .build()
     val executorExtraClasspathEnv = executorExtraClasspath.map { cp =>
       new EnvVarBuilder()
@@ -144,7 +164,7 @@ private[spark] class BasicExecutorFeatureStep(
       .withImagePullPolicy(kubernetesConf.imagePullPolicy())
       .withNewResources()
         .addToRequests("memory", executorMemoryQuantity)
-        .addToLimits("memory", executorMemoryQuantity)
+        .addToLimits("memory", executorMemoryLimit)
         .addToRequests("cpu", executorCpuQuantity)
         .endResources()
       .addAllToEnv(executorEnv.asJava)
@@ -153,7 +173,7 @@ private[spark] class BasicExecutorFeatureStep(
       .build()
     val containerWithLimitCores = executorLimitCores.map { limitCores =>
       val executorCpuLimitQuantity = new QuantityBuilder(false)
-        .withAmount(limitCores)
+        .withAmount((limitCores.toDouble * executorCoresFactor).toString)
         .build()
       new ContainerBuilder(executorContainer)
         .editResources()
