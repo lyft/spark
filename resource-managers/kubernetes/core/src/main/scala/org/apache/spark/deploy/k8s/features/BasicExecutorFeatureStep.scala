@@ -79,10 +79,8 @@ private[spark] class BasicExecutorFeatureStep(
 
   executorMemoryTotal += Utils.memoryStringToMb(executorOffHeapMiB)
   executorMemoryTotal = (executorMemoryTotal.toDouble * executorMemoryFactor).toLong
-  println(s"Executor memory before $executorMemoryTotal")
 
   private val executorTotalMemoryLimit = (executorMemoryTotal * executorMemoryLimitFactor).toInt
-  println(s"Executor memory after $executorMemoryTotal limit $executorTotalMemoryLimit")
   private val executorCores = kubernetesConf.sparkConf.getInt("spark.executor.cores", 1)
   private var executorCoresRequest =
     if (kubernetesConf.sparkConf.contains(KUBERNETES_EXECUTOR_REQUEST_CORES)) {
