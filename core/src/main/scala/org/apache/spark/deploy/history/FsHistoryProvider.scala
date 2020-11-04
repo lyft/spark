@@ -466,6 +466,7 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
         .filter { reader =>
           try {
             val info = listing.read(classOf[LogInfo], reader.rootPath.toString())
+            logDebug("working on application located at: " + entry.getPath().toString())
 
             if (info.appId.isDefined) {
               // If the SHS view has a valid application, update the time the file was last seen so
