@@ -457,17 +457,17 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
   private[history] def checkForLogs(): Unit = {
     try {
       val newLastScanTime = clock.getTimeMillis()
-      logDebug("Checking change")
+      logDebug("Checking change 2")
       logDebug(s"Scanning $logDir with lastScanTime==$lastScanTime")
 
       val updated = Option(fs.listStatus(new Path(logDir))).map(_.toSeq).getOrElse(Nil)
-        .filter { entry => !isBlacklisted(entry.getPath) }
+        .filter { entry => !entry.isDirectory() && !entry.getPath().getName().startsWith(".") && !isBlacklisted(entry.getPath) }
         .filter { entry => !isProcessing(entry.getPath) }
         .flatMap { entry => EventLogFileReader(fs, entry) }
         .filter { reader =>
           try {
-            val info = listing.read(classOf[LogInfo], reader.rootPath.toString())
-            logDebug("working on application located at: " + reader.rootPath.toString())
+            //logDebug("working on application located at: " + reader.rootPath.toString())
+            val info = listing.read(classOf[LogInfo], reader.rootPath.toString())            
 
             if (info.appId.isDefined) {
               // If the SHS view has a valid application, update the time the file was last seen so
