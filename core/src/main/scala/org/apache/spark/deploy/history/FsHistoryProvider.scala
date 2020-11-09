@@ -466,7 +466,7 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
         .flatMap { entry => EventLogFileReader(fs, entry) }
         .filter { reader =>
           try {
-            //logDebug("working on application located at: " + reader.rootPath.toString())
+            logDebug("working on application located at: " + reader.rootPath.toString())
             val info = listing.read(classOf[LogInfo], reader.rootPath.toString())            
 
             if (info.appId.isDefined) {
