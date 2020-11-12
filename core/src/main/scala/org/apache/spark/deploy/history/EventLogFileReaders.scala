@@ -28,12 +28,13 @@ import org.apache.hadoop.hdfs.DFSInputStream
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.history.EventLogFileWriter.codecName
 import org.apache.spark.io.CompressionCodec
+import org.apache.spark.internal.Logging
 import org.apache.spark.util.Utils
 
 /** The base class of reader which will read the information of event log file(s). */
 abstract class EventLogFileReader(
     protected val fileSystem: FileSystem,
-    val rootPath: Path) {
+    val rootPath: Path) extends Logging {
 
   protected def fileSizeForDFS(path: Path): Option[Long] = {
     Utils.tryWithResource(fileSystem.open(path)) { in =>
@@ -96,7 +97,7 @@ abstract class EventLogFileReader(
   def totalSize: Long
 }
 
-object EventLogFileReader {
+object EventLogFileReader extends Logging {
   // A cache for compression codecs to avoid creating the same codec many times
   private val codecMap = new ConcurrentHashMap[String, CompressionCodec]()
 
@@ -106,7 +107,7 @@ object EventLogFileReader {
       lastIndex: Option[Long]): EventLogFileReader = {
     lastIndex match {
       case Some(_) => new RollingEventLogFilesFileReader(fs, path)
-      case None => new SingleFileEventLogFileReader(fs, path, new FileStatus())
+      case None => new SingleFileEventLogFileReader(fs, path, None)
     }
   }
 
@@ -116,7 +117,7 @@ object EventLogFileReader {
 
   def apply(fs: FileSystem, status: FileStatus): Option[EventLogFileReader] = {
     if (isSingleEventLog(status)) {
-      Some(new SingleFileEventLogFileReader(fs, status.getPath, status))
+      Some(new SingleFileEventLogFileReader(fs, status.getPath, Some(status)))
     } else if (isRollingEventLogs(status)) {
       Some(new RollingEventLogFilesFileReader(fs, status.getPath))
     } else {
@@ -165,10 +166,13 @@ object EventLogFileReader {
  * status of log file.
  */
 class SingleFileEventLogFileReader(
-    fs: FileSystem,
-    path: Path, status:FileStatus) extends EventLogFileReader(fs, path) {
-  //private lazy val status = fileSystem.getFileStatus(rootPath)
-  
+    val fs: FileSystem,
+    val path: Path, var s:Option[FileStatus]) extends EventLogFileReader(fs, path) {
+  private lazy val status = s match {
+    case Some(fs) => fs
+    case None => fileSystem.getFileStatus(rootPath)
+  }
+
   override def lastIndex: Option[Long] = None
 
   override def fileSizeForLastIndex: Long = status.getLen
@@ -190,11 +194,17 @@ class SingleFileEventLogFileReader(
     addFileAsZipEntry(zipStream, rootPath, rootPath.getName)
   }
 
-  override def listEventLogFiles: Seq[FileStatus] = Seq(status)
+  override def listEventLogFiles: Seq[FileStatus] = {
+    //logInfo("**** status in listEventLogFiles: "+status)
+    Seq(this.status)
+  }
 
   override def compressionCodec: Option[String] = EventLogFileWriter.codecName(rootPath)
 
   override def totalSize: Long = fileSizeForLastIndex
+
+  //logInfo("**** status in constructor: "+status)
+
 }
 
 /**
