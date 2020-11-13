@@ -200,7 +200,6 @@ class SingleFileEventLogFileReader(
   override def compressionCodec: Option[String] = EventLogFileWriter.codecName(rootPath)
 
   override def totalSize: Long = fileSizeForLastIndex
-
 }
 
 /**
