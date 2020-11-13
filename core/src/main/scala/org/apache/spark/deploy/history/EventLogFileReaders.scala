@@ -193,7 +193,7 @@ class SingleFileEventLogFileReader(
     addFileAsZipEntry(zipStream, rootPath, rootPath.getName)
   }
 
-  override def listEventLogFiles: Seq[FileStatus] = Seq(this.status)
+  override def listEventLogFiles: Seq[FileStatus] = Seq(status)
 
   override def compressionCodec: Option[String] = EventLogFileWriter.codecName(rootPath)
 
