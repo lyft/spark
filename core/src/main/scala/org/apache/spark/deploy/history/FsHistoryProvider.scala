@@ -538,7 +538,7 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
         }
 
       if (updated.nonEmpty) {
-//        logDebug(s"New/updated attempts found: ${updated.size} ${updated.map(_.rootPath)}")
+        logDebug(s"New/updated attempts found: ${updated.size} ${updated.map(_.rootPath)}")
       }
 
       updated.foreach { entry =>
