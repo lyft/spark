@@ -466,7 +466,6 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
         .flatMap { entry => EventLogFileReader(fs, entry) }
         .filter { reader =>
           try {
-            // logDebug("working on application located at: " + reader.rootPath.toString())
             val info = listing.read(classOf[LogInfo], reader.rootPath.toString())            
 
             if (info.appId.isDefined) {
@@ -1063,9 +1062,7 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
     } replayBus.addListener(listener)
 
     try {
-      //logInfo("**** class of reader: "+reader.getClass().toString())
       val eventLogFiles = reader.listEventLogFiles
-      //logInfo("**** num files in the reader: "+eventLogFiles.length+"; files: "+eventLogFiles)
       logInfo(s"Parsing ${reader.rootPath} to re-build UI...")
       parseAppEventLogs(eventLogFiles, replayBus, !reader.completed)
       trackingStore.close(false)
@@ -1088,7 +1085,6 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
     var continueReplay = true
     logFiles.foreach { file =>
       if (continueReplay) {
-        logInfo("**** file class: "+file.getClass().toString()+"; file path: "+file.getPath+"; file: "+file.toString())
         Utils.tryWithResource(EventLogFileReader.openEventLog(file.getPath, fs)) { in =>
           continueReplay = replayBus.replay(in, file.getPath.toString,
             maybeTruncated = maybeTruncated, eventsFilter = eventsFilter)
@@ -1215,7 +1211,6 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
     while (store == null) {
       try {
         val s = new InMemoryStore()
-        //logInfo("**** logDir: "+logDir+"; logPath: "+attempt.logPath)
         val reader = EventLogFileReader(fs, new Path(logDir, attempt.logPath),
           attempt.lastIndex)
         rebuildAppStore(s, reader, attempt.info.lastUpdated.getTime())

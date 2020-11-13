@@ -28,13 +28,12 @@ import org.apache.hadoop.hdfs.DFSInputStream
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.history.EventLogFileWriter.codecName
 import org.apache.spark.io.CompressionCodec
-import org.apache.spark.internal.Logging
 import org.apache.spark.util.Utils
 
 /** The base class of reader which will read the information of event log file(s). */
 abstract class EventLogFileReader(
     protected val fileSystem: FileSystem,
-    val rootPath: Path) extends Logging {
+    val rootPath: Path) {
 
   protected def fileSizeForDFS(path: Path): Option[Long] = {
     Utils.tryWithResource(fileSystem.open(path)) { in =>
@@ -97,7 +96,7 @@ abstract class EventLogFileReader(
   def totalSize: Long
 }
 
-object EventLogFileReader extends Logging {
+object EventLogFileReader {
   // A cache for compression codecs to avoid creating the same codec many times
   private val codecMap = new ConcurrentHashMap[String, CompressionCodec]()
 
@@ -166,10 +165,10 @@ object EventLogFileReader extends Logging {
  * status of log file.
  */
 class SingleFileEventLogFileReader(
-    val fs: FileSystem,
-    val path: Path, var s:Option[FileStatus]) extends EventLogFileReader(fs, path) {
-  private lazy val status = s match {
-    case Some(fs) => fs
+    fs: FileSystem,
+    path: Path, fileStatus: Option[FileStatus]) extends EventLogFileReader(fs, path) {
+  private lazy val status = fileStatus match {
+    case Some(s) => s
     case None => fileSystem.getFileStatus(rootPath)
   }
 
@@ -195,15 +194,12 @@ class SingleFileEventLogFileReader(
   }
 
   override def listEventLogFiles: Seq[FileStatus] = {
-    //logInfo("**** status in listEventLogFiles: "+status)
     Seq(this.status)
   }
 
   override def compressionCodec: Option[String] = EventLogFileWriter.codecName(rootPath)
 
   override def totalSize: Long = fileSizeForLastIndex
-
-  //logInfo("**** status in constructor: "+status)
 
 }
 
