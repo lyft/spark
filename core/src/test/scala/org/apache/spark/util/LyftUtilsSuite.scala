@@ -30,7 +30,7 @@ object TestObjectLyftUtils {
 class LyftUtilsSuite extends SparkFunSuite with ResetSystemProperties with Logging {
 
   test("callObjectMethodNoArguments") {
-    // Test -1
+    // Test calling the method using reflection 1
     LyftUtils.callObjectMethodNoArguments("org.apache.spark.util.TestObjectLyftUtils$", "setVal")
     assert(TestObjectLyftUtils.testVar === 1)
   }
