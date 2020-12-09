@@ -18,8 +18,14 @@
 package org.apache.spark.util
 
 private[spark] object LyftUtils {
-  def callObjectMethodNoArguments(objectName: String, method: String): Unit = {
+  def callObjectMethodNoArguments(objectName: String, method: String): Boolean = {
+    var ok = true
+    try {
       val m = Utils.classForName(objectName).getField("MODULE$").get(null)
       Utils.classForName(objectName).getDeclaredMethod(method).invoke(m)
+    } catch {
+      case e: Throwable => ok = false
+    }
+    ok
   }
 }

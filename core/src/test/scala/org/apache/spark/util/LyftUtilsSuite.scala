@@ -31,7 +31,10 @@ class LyftUtilsSuite extends SparkFunSuite with ResetSystemProperties with Loggi
 
   test("callObjectMethodNoArguments") {
     // Test calling the method using reflection 1
-    LyftUtils.callObjectMethodNoArguments("org.apache.spark.util.TestObjectLyftUtils$", "setVal")
+    val v = LyftUtils.callObjectMethodNoArguments("org.apache.spark.util.TestObjectLyftUtils$", "setVal")
+    assert(v === true)
     assert(TestObjectLyftUtils.testVar === 1)
+    assert(false ==
+      LyftUtils.callObjectMethodNoArguments("org.apache.spark.util.TestObjectLyftUtils$", "setVal1"))
   }
 }
