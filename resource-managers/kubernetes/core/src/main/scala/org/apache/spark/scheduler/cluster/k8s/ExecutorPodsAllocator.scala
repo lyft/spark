@@ -222,13 +222,11 @@ private[spark] class ExecutorPodsAllocator(
         kubernetesClient.pods().create(podWithAttachedContainer)
         newlyCreatedExecutors(newExecutorId) = clock.getTimeMillis()
         logDebug(s"Requested executor with id $newExecutorId from Kubernetes.")
-        try {
-          val m = Class.forName("com.lyft.data.spark.AppMetrics$").getField("MODULE$").get(null)
-          Class.forName("com.lyft.data.spark.AppMetrics$")
-            .getDeclaredMethod("setFirstExecutorAllocationTime").invoke(m)
-        } catch {
-          case e: Throwable =>
-        }
+
+
+        org.apache.spark.util.LyftUtils.callObjectMethodNoArguments(
+          "com.lyft.data.spark.AppMetrics$",
+          "setFirstExecutorAllocationTime")
       }
     }
 
