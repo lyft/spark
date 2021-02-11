@@ -268,8 +268,9 @@ private[spark] class ExecutorAllocationManager(
    * Stop the allocation manager.
    */
   def stop(): Unit = {
+    logInfo("shutting down the executor -- 271")
     executor.shutdown()
-    executor.awaitTermination(10, TimeUnit.SECONDS)
+    executor.awaitTermination(500, TimeUnit.SECONDS)
   }
 
   /**
