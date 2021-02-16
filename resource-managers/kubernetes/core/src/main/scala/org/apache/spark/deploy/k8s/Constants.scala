@@ -59,6 +59,7 @@ private[spark] object Constants {
   val ENV_JAVA_OPT_PREFIX = "SPARK_JAVA_OPT_"
   val ENV_CLASSPATH = "SPARK_CLASSPATH"
   val ENV_DRIVER_BIND_ADDRESS = "SPARK_DRIVER_BIND_ADDRESS"
+  val ENV_DRIVER_POD_IP = "SPARK_DRIVER_POD_IP"
   val ENV_SPARK_CONF_DIR = "SPARK_CONF_DIR"
   val ENV_SPARK_USER = "SPARK_USER"
   // Spark app configs for containers
