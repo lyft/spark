@@ -72,6 +72,8 @@ case "$1" in
     CMD=(
       "$SPARK_HOME/bin/spark-submit"
       --conf "spark.driver.bindAddress=$SPARK_DRIVER_BIND_ADDRESS"
+      --conf "spark.driver.host=$SPARK_K8S_DRIVER_POD_IP"
+      --conf "spark.driver.port=$SPARK_K8S_DRIVER_POD_PORT"
       --deploy-mode client
       "$@"
     )
