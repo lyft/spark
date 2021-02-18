@@ -145,7 +145,7 @@ abstract class PartitioningAwareFileIndex(
       // We use leaf dirs containing data files to discover the schema.
       val leafDirs = leafDirToChildrenFiles.filter { case (_, files) =>
         files.exists(f => isDataPath(f.getPath))
-      }.keys.toSeq
+      }.flatMap { case (_, files) => files.map(_.getPath.getParent) }.toSeq.distinct
 
       val caseInsensitiveOptions = CaseInsensitiveMap(parameters)
       val timeZoneId = caseInsensitiveOptions.get(DateTimeUtils.TIMEZONE_OPTION)

@@ -98,7 +98,12 @@ class InMemoryFileIndex(
     val files = listLeafFiles(rootPaths)
     cachedLeafFiles =
       new mutable.LinkedHashMap[Path, FileStatus]() ++= files.map(f => f.getPath -> f)
-    cachedLeafDirToChildrenFiles = files.toArray.groupBy(_.getPath.getParent)
+    val fullyQualifiedRoots = rootPaths.map(rootPath => rootPath.getFileSystem(hadoopConf).makeQualified(rootPath))
+    cachedLeafDirToChildrenFiles = files.toArray.groupBy { p =>
+      fullyQualifiedRoots.find { r =>
+        p.getPath.toString.startsWith(r.toString)
+      }.get
+    }
     cachedPartitionSpec = null
   }
 
