@@ -158,11 +158,11 @@ public class HiveCommandOperation extends ExecuteStatementOperation {
     }
     List<String> rows = readResults((int) maxRows);
     RowSet rowSet = RowSetFactory.create(resultSchema, getProtocolVersion(), false);
-    rowSet.setStartOffset(readRows)
+    rowSet.setStartOffset(readRows);
     for (String row : rows) {
       rowSet.addRow(new String[] {row});
     }
-    readRows += rows.size()
+    readRows += rows.size();
     return rowSet;
   }
 
