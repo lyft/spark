@@ -329,6 +329,11 @@ public class SQLOperation extends ExecuteStatementOperation {
        */
       if (orientation.equals(FetchOrientation.FETCH_FIRST) && fetchStarted) {
         driver.resetFetch();
+        rowSet.setStartOffset(0);
+      }
+      if (fetchTask != null)
+      {
+        rowSet.setStartOffset(fetchTask.totalRows);
       }
       fetchStarted = true;
       driver.setMaxRows((int) maxRows);
