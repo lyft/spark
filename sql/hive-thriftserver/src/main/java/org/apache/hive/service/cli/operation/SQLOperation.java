@@ -329,17 +329,15 @@ public class SQLOperation extends ExecuteStatementOperation {
        */
       if (orientation.equals(FetchOrientation.FETCH_FIRST) && fetchStarted) {
         driver.resetFetch();
-        rowSet.setStartOffset(0);
-      }
-      if (fetchTask != null)
-      {
-        rowSet.setStartOffset(fetchTask.totalRows);
       }
       fetchStarted = true;
       driver.setMaxRows((int) maxRows);
       if (driver.getResults(convey)) {
-        return decode(convey, rowSet);
+        decode(convey, rowSet);
       }
+      long startRowOffset = driver.getStartRowOffset();
+      rowSet.setStartOffset(startRowOffset);
+      driver.setStartRowOffset(startRowOffset + rowSet.numRows());      
       return rowSet;
     } catch (IOException e) {
       throw new HiveSQLException(e);

@@ -51,6 +51,7 @@ import org.apache.hive.service.cli.session.HiveSession;
 public class HiveCommandOperation extends ExecuteStatementOperation {
   private CommandProcessor commandProcessor;
   private TableSchema resultSchema = null;
+  private int readRows = 0;
 
   /**
    * For processors other than Hive queries (Driver), they output to session.out (a temp file)
@@ -157,10 +158,11 @@ public class HiveCommandOperation extends ExecuteStatementOperation {
     }
     List<String> rows = readResults((int) maxRows);
     RowSet rowSet = RowSetFactory.create(resultSchema, getProtocolVersion(), false);
-
+    rowSet.setStartOffset(readRows)
     for (String row : rows) {
       rowSet.addRow(new String[] {row});
     }
+    readRows += rows.size()
     return rowSet;
   }
 
@@ -211,5 +213,6 @@ public class HiveCommandOperation extends ExecuteStatementOperation {
       ServiceUtils.cleanup(LOG, resultReader);
       resultReader = null;
     }
+    readRows = 0;
   }
 }
