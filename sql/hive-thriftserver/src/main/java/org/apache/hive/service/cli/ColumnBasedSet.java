@@ -57,6 +57,7 @@ public class ColumnBasedSet implements RowSet {
       for (ColumnDescriptor colDesc : schema.getColumnDescriptors()) {
         columns.add(new ColumnBuffer(colDesc.getType()));
       }
+    }
   }
 
   public ColumnBasedSet(TRowSet tRowSet) throws TException {
