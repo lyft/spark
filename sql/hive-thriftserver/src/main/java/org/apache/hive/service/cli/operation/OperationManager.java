@@ -249,6 +249,10 @@ public class OperationManager extends AbstractService {
   public RowSet getOperationLogRowSet(OperationHandle opHandle,
       FetchOrientation orientation, long maxRows)
           throws HiveSQLException {
+    TableSchema tableSchema = new TableSchema(getLogSchema());
+    RowSet rowSet = RowSetFactory.create(tableSchema,
+        getOperation(opHandle).getProtocolVersion(), false);
+
     // get the OperationLog object from the operation
     OperationLog operationLog = getOperation(opHandle).getOperationLog();
     if (operationLog == null) {
@@ -257,17 +261,14 @@ public class OperationManager extends AbstractService {
 
     // read logs
     List<String> logs;
+    rowSet.setStartOffset(operationLog.getStartPosition(isFetchFirst(orientation)));
     try {
       logs = operationLog.readOperationLog(isFetchFirst(orientation), maxRows);
     } catch (SQLException e) {
       throw new HiveSQLException(e.getMessage(), e.getCause());
     }
 
-
     // convert logs to RowSet
-    TableSchema tableSchema = new TableSchema(getLogSchema());
-    RowSet rowSet = RowSetFactory.create(tableSchema,
-        getOperation(opHandle).getProtocolVersion(), false);
     for (String log : logs) {
       rowSet.addRow(new String[] {log});
     }

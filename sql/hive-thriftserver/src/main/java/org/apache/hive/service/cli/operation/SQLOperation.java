@@ -333,8 +333,11 @@ public class SQLOperation extends ExecuteStatementOperation {
       fetchStarted = true;
       driver.setMaxRows((int) maxRows);
       if (driver.getResults(convey)) {
-        return decode(convey, rowSet);
+        decode(convey, rowSet);
       }
+      long startRowOffset = driver.getStartRowOffset();
+      rowSet.setStartOffset(startRowOffset);
+      driver.setStartRowOffset(startRowOffset + rowSet.numRows());      
       return rowSet;
     } catch (IOException e) {
       throw new HiveSQLException(e);
