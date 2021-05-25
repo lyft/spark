@@ -73,8 +73,10 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
    * @since 1.4.0
    */
   def schema(schema: StructType): DataFrameReader = {
-    val replaced = CharVarcharUtils.failIfHasCharVarchar(schema).asInstanceOf[StructType]
-    this.userSpecifiedSchema = Option(replaced)
+    if (schema != null) {
+      val replaced = CharVarcharUtils.failIfHasCharVarchar(schema).asInstanceOf[StructType]
+      this.userSpecifiedSchema = Option(replaced)
+    }
     this
   }
 
@@ -90,10 +92,7 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
    * @since 2.3.0
    */
   def schema(schemaString: String): DataFrameReader = {
-    val rawSchema = StructType.fromDDL(schemaString)
-    val schema = CharVarcharUtils.failIfHasCharVarchar(rawSchema).asInstanceOf[StructType]
-    this.userSpecifiedSchema = Option(schema)
-    this
+    schema(StructType.fromDDL(schemaString))
   }
 
   /**
@@ -744,7 +743,7 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
    *     <li>`STOP_AT_DELIMITER`: If unescaped quotes are found in the input, consider the value
    *     as an unquoted value. This will make the parser accumulate all characters until the
    *     delimiter or a line ending is found in the input.</li>
-   *     <li>`STOP_AT_DELIMITER`: If unescaped quotes are found in the input, the content parsed
+   *     <li>`SKIP_VALUE`: If unescaped quotes are found in the input, the content parsed
    *     for the given value will be skipped and the value set in nullValue will be produced
    *     instead.</li>
    *     <li>`RAISE_ERROR`: If unescaped quotes are found in the input, a TextParsingException

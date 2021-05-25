@@ -23,7 +23,7 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.{SharedSparkSession, SQLTestUtils}
 
 /**
- * The base trait for DML - insert syntax
+ * The base trait for SQL INSERT.
  */
 trait SQLInsertTestSuite extends QueryTest with SQLTestUtils {
 
@@ -206,6 +206,55 @@ trait SQLInsertTestSuite extends QueryTest with SQLTestUtils {
       sql(s"CREATE TABLE t(i STRING, c string) USING PARQUET PARTITIONED BY (c)")
       sql("INSERT OVERWRITE t PARTITION (c=null) VALUES ('1')")
       checkAnswer(spark.table("t"), Row("1", null))
+    }
+  }
+
+  test("SPARK-34556: " +
+    "checking duplicate static partition columns should respect case sensitive conf") {
+    withTable("t") {
+      sql(s"CREATE TABLE t(i STRING, c string) USING PARQUET PARTITIONED BY (c)")
+      val e = intercept[AnalysisException] {
+        sql("INSERT OVERWRITE t PARTITION (c='2', C='3') VALUES (1)")
+      }
+      assert(e.getMessage.contains("Found duplicate keys 'c'"))
+    }
+    // The following code is skipped for Hive because columns stored in Hive Metastore is always
+    // case insensitive and we cannot create such table in Hive Metastore.
+    if (!format.startsWith("hive")) {
+      withSQLConf(SQLConf.CASE_SENSITIVE.key -> "true") {
+        withTable("t") {
+          sql(s"CREATE TABLE t(i int, c string, C string) USING PARQUET PARTITIONED BY (c, C)")
+          sql("INSERT OVERWRITE t PARTITION (c='2', C='3') VALUES (1)")
+          checkAnswer(spark.table("t"), Row(1, "2", "3"))
+        }
+      }
+    }
+  }
+
+  test("SPARK-30844: static partition should also follow StoreAssignmentPolicy") {
+    val testingPolicies = if (format == "foo") {
+      // DS v2 doesn't support the legacy policy
+      Seq(SQLConf.StoreAssignmentPolicy.ANSI, SQLConf.StoreAssignmentPolicy.STRICT)
+    } else {
+      SQLConf.StoreAssignmentPolicy.values
+    }
+    testingPolicies.foreach { policy =>
+      withSQLConf(
+        SQLConf.STORE_ASSIGNMENT_POLICY.key -> policy.toString) {
+        withTable("t") {
+          sql("create table t(a int, b string) using parquet partitioned by (a)")
+          policy match {
+            case SQLConf.StoreAssignmentPolicy.ANSI | SQLConf.StoreAssignmentPolicy.STRICT =>
+              val errorMsg = intercept[NumberFormatException] {
+                sql("insert into t partition(a='ansi') values('ansi')")
+              }.getMessage
+              assert(errorMsg.contains("invalid input syntax for type numeric: ansi"))
+            case SQLConf.StoreAssignmentPolicy.LEGACY =>
+              sql("insert into t partition(a='ansi') values('ansi')")
+              checkAnswer(sql("select * from t"), Row("ansi", null) :: Nil)
+          }
+        }
+      }
     }
   }
 }

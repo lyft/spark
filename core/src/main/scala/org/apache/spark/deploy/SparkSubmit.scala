@@ -952,6 +952,15 @@ private[spark] class SparkSubmit extends Logging {
     } catch {
       case t: Throwable =>
         throw findCause(t)
+    } finally {
+      if (!isShell(args.primaryResource) && !isSqlShell(args.mainClass) &&
+        !isThriftServer(args.mainClass)) {
+        try {
+          SparkContext.getActive.foreach(_.stop())
+        } catch {
+          case e: Throwable => logError(s"Failed to close SparkContext: $e")
+        }
+      }
     }
   }
 
@@ -1186,7 +1195,7 @@ private[spark] object SparkSubmitUtils {
     sp.setM2compatible(true)
     sp.setUsepoms(true)
     sp.setRoot(sys.env.getOrElse(
-      "DEFAULT_ARTIFACT_REPOSITORY", "https://dl.bintray.com/spark-packages/maven"))
+      "DEFAULT_ARTIFACT_REPOSITORY", "https://repos.spark-packages.org/"))
     sp.setName("spark-packages")
     cr.add(sp)
     cr

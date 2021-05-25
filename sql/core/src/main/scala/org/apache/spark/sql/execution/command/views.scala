@@ -351,10 +351,21 @@ object ViewHelper {
     "spark.sql.codegen.",
     "spark.sql.execution.",
     "spark.sql.shuffle.",
-    "spark.sql.adaptive.")
+    "spark.sql.adaptive.",
+    SQLConf.ADDITIONAL_REMOTE_REPOSITORIES.key)
 
+  private val configAllowList = Seq(
+    SQLConf.DISABLE_HINTS.key
+  )
+
+  /**
+   * Capture view config either of:
+   * 1. exists in allowList
+   * 2. do not exists in denyList
+   */
   private def shouldCaptureConfig(key: String): Boolean = {
-    !configPrefixDenyList.exists(prefix => key.startsWith(prefix))
+    configAllowList.exists(prefix => key.equals(prefix)) ||
+      !configPrefixDenyList.exists(prefix => key.startsWith(prefix))
   }
 
   import CatalogTable._

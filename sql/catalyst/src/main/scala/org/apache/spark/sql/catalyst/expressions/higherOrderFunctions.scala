@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions
 
 import java.util.Comparator
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 
 import scala.collection.mutable
 
@@ -50,6 +50,16 @@ case class UnresolvedNamedLambdaVariable(nameParts: Seq[String])
   override def toString: String = s"lambda '$name"
 
   override def sql: String = name
+}
+
+object UnresolvedNamedLambdaVariable {
+
+  // Counter to ensure lambda variable names are unique
+  private val nextVarNameId = new AtomicInteger(0)
+
+  def freshVarName(name: String): String = {
+    s"${name}_${nextVarNameId.getAndIncrement()}"
+  }
 }
 
 /**
@@ -277,7 +287,8 @@ case class ArrayTransform(
       if (indexVar.isDefined) {
         indexVar.get.value.set(i)
       }
-      result.update(i, f.eval(inputRow))
+      val v = InternalRow.copyValue(f.eval(inputRow))
+      result.update(i, v)
       i += 1
     }
     result
@@ -796,7 +807,7 @@ case class TransformKeys(
     while (i < map.numElements) {
       keyVar.value.set(map.keyArray().get(i, keyVar.dataType))
       valueVar.value.set(map.valueArray().get(i, valueVar.dataType))
-      val result = functionForEval.eval(inputRow)
+      val result = InternalRow.copyValue(functionForEval.eval(inputRow))
       resultKeys.update(i, result)
       i += 1
     }
@@ -843,7 +854,8 @@ case class TransformValues(
     while (i < map.numElements) {
       keyVar.value.set(map.keyArray().get(i, keyVar.dataType))
       valueVar.value.set(map.valueArray().get(i, valueVar.dataType))
-      resultValues.update(i, functionForEval.eval(inputRow))
+      val v = InternalRow.copyValue(functionForEval.eval(inputRow))
+      resultValues.update(i, v)
       i += 1
     }
     new ArrayBasedMapData(map.keyArray(), resultValues)
@@ -1026,7 +1038,8 @@ case class MapZipWith(left: Expression, right: Expression, function: Expression)
       value1Var.value.set(v1)
       value2Var.value.set(v2)
       keys.update(i, key)
-      values.update(i, functionForEval.eval(inputRow))
+      val v = InternalRow.copyValue(functionForEval.eval(inputRow))
+      values.update(i, v)
       i += 1
     }
     new ArrayBasedMapData(keys, values)
@@ -1098,7 +1111,8 @@ case class ZipWith(left: Expression, right: Expression, function: Expression)
           } else {
             rightElemVar.value.set(null)
           }
-          result.update(i, f.eval(input))
+          val v = InternalRow.copyValue(f.eval(input))
+          result.update(i, v)
           i += 1
         }
         result

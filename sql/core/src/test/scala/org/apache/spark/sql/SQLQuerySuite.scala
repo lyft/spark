@@ -33,10 +33,10 @@ import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
 import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.command.FunctionsCommand
-import org.apache.spark.sql.execution.datasources.SchemaColumnConvertNotSupportedException
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 import org.apache.spark.sql.execution.datasources.v2.orc.OrcScan
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
+import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.execution.joins.{BroadcastHashJoinExec, CartesianProductExec, SortMergeJoinExec}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.internal.SQLConf
@@ -3596,6 +3596,9 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
         Row("A", null, 5) :: Row("A", "{\"i\": 1}", 3) :: Row("A", "{\"i\": 2}", 2) ::
           Row("B", null, 1) :: Row("B", "{\"i\": 1}", 1) ::
           Row("C", null, 3) :: Row("C", "{\"i\": 1}", 3) :: Nil)
+
+      assert(spark.table("t").groupBy($"c.json_string").count().schema.fieldNames ===
+        Seq("json_string", "count"))
     }
   }
 
@@ -3786,69 +3789,6 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     }
   }
 
-  test("SPARK-34212 Parquet should read decimals correctly") {
-    def readParquet(schema: String, path: File): DataFrame = {
-      spark.read.schema(schema).parquet(path.toString)
-    }
-
-    withTempPath { path =>
-      // a is int-decimal (4 bytes), b is long-decimal (8 bytes), c is binary-decimal (16 bytes)
-      val df = sql("SELECT 1.0 a, CAST(1.23 AS DECIMAL(17, 2)) b, CAST(1.23 AS DECIMAL(36, 2)) c")
-      df.write.parquet(path.toString)
-
-      Seq(true, false).foreach { vectorizedReader =>
-        withSQLConf(SQLConf.PARQUET_VECTORIZED_READER_ENABLED.key -> vectorizedReader.toString) {
-          // We can read the decimal parquet field with a larger precision, if scale is the same.
-          val schema = "a DECIMAL(9, 1), b DECIMAL(18, 2), c DECIMAL(38, 2)"
-          checkAnswer(readParquet(schema, path), df)
-        }
-      }
-
-      withSQLConf(SQLConf.PARQUET_VECTORIZED_READER_ENABLED.key -> "false") {
-        val schema1 = "a DECIMAL(3, 2), b DECIMAL(18, 3), c DECIMAL(37, 3)"
-        checkAnswer(readParquet(schema1, path), df)
-        val schema2 = "a DECIMAL(3, 0), b DECIMAL(18, 1), c DECIMAL(37, 1)"
-        checkAnswer(readParquet(schema2, path), Row(1, 1.2, 1.2))
-      }
-
-      withSQLConf(SQLConf.PARQUET_VECTORIZED_READER_ENABLED.key -> "true") {
-        Seq("a DECIMAL(3, 2)", "b DECIMAL(18, 1)", "c DECIMAL(37, 1)").foreach { schema =>
-          val e = intercept[SparkException] {
-            readParquet(schema, path).collect()
-          }.getCause.getCause
-          assert(e.isInstanceOf[SchemaColumnConvertNotSupportedException])
-        }
-      }
-    }
-
-    // tests for parquet types without decimal metadata.
-    withTempPath { path =>
-      val df = sql(s"SELECT 1 a, 123456 b, ${Int.MaxValue.toLong * 10} c, CAST('1.2' AS BINARY) d")
-      df.write.parquet(path.toString)
-
-      withSQLConf(SQLConf.PARQUET_VECTORIZED_READER_ENABLED.key -> "false") {
-        checkAnswer(readParquet("a DECIMAL(3, 2)", path), sql("SELECT 1.00"))
-        checkAnswer(readParquet("b DECIMAL(3, 2)", path), Row(null))
-        checkAnswer(readParquet("b DECIMAL(11, 1)", path), sql("SELECT 123456.0"))
-        checkAnswer(readParquet("c DECIMAL(11, 1)", path), Row(null))
-        checkAnswer(readParquet("c DECIMAL(13, 0)", path), df.select("c"))
-        val e = intercept[SparkException] {
-          readParquet("d DECIMAL(3, 2)", path).collect()
-        }.getCause
-        assert(e.getMessage.contains("Please read this column/field as Spark BINARY type"))
-      }
-
-      withSQLConf(SQLConf.PARQUET_VECTORIZED_READER_ENABLED.key -> "true") {
-        Seq("a DECIMAL(3, 2)", "c DECIMAL(18, 1)", "d DECIMAL(37, 1)").foreach { schema =>
-          val e = intercept[SparkException] {
-            readParquet(schema, path).collect()
-          }.getCause.getCause
-          assert(e.isInstanceOf[SchemaColumnConvertNotSupportedException])
-        }
-      }
-    }
-  }
-
   test("SPARK-34421: Resolve temporary objects in temporary views with CTEs") {
     val tempFuncName = "temp_func"
     withUserDefinedFunction(tempFuncName -> true) {
@@ -3923,6 +3863,48 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
         }
         assert(e2.message.contains("Not allowed to create a permanent view " +
           s"`default`.`$testViewName` by referencing a temporary function `$tempFuncName`"))
+      }
+    }
+  }
+
+  test("SPARK-34796: Avoid code-gen compilation error for LIMIT query") {
+    withTable("left_table", "empty_right_table", "output_table") {
+      spark.range(5).toDF("k").write.saveAsTable("left_table")
+      spark.range(0).toDF("k").write.saveAsTable("empty_right_table")
+
+      withSQLConf(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key -> "false") {
+        spark.sql("CREATE TABLE output_table (k INT) USING parquet")
+        spark.sql(
+          """
+            |INSERT INTO TABLE output_table
+            |SELECT t1.k FROM left_table t1
+            |JOIN empty_right_table t2
+            |ON t1.k = t2.k
+            |LIMIT 3
+          """.stripMargin)
+      }
+    }
+  }
+
+  test("SPARK-33482: Fix FileScan canonicalization") {
+    withSQLConf(SQLConf.USE_V1_SOURCE_LIST.key -> "") {
+      withTempPath { path =>
+        spark.range(5).toDF().write.mode("overwrite").parquet(path.toString)
+        withTempView("t") {
+          spark.read.parquet(path.toString).createOrReplaceTempView("t")
+          val df = sql(
+            """
+              |SELECT *
+              |FROM t AS t1
+              |JOIN t AS t2 ON t2.id = t1.id
+              |JOIN t AS t3 ON t3.id = t2.id
+              |""".stripMargin)
+          df.collect()
+          val reusedExchanges = collect(df.queryExecution.executedPlan) {
+            case r: ReusedExchangeExec => r
+          }
+          assert(reusedExchanges.size == 1)
+        }
       }
     }
   }

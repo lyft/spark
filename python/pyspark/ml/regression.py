@@ -180,10 +180,8 @@ class LinearRegression(_JavaRegressor, _LinearRegressionParams, JavaMLWritable, 
     >>> test1 = spark.createDataFrame([(Vectors.sparse(1, [0], [1.0]),)], ["features"])
     >>> abs(model.transform(test1).head().newPrediction - 1.0) < 0.001
     True
-    >>> lr.setParams("vector")
-    Traceback (most recent call last):
-        ...
-    TypeError: Method setParams forces keyword arguments.
+    >>> lr.setParams(featuresCol="vector")
+    LinearRegression...
     >>> lr_path = temp_path + "/lr"
     >>> lr.save(lr_path)
     >>> lr2 = LinearRegression.load(lr_path)
@@ -350,7 +348,7 @@ class LinearRegressionModel(_JavaRegressionModel, _LinearRegressionParams, Gener
     @since("2.0.0")
     def summary(self):
         """
-        Gets summary (e.g. residuals, mse, r-squared ) of model on
+        Gets summary (residuals, MSE, r-squared ) of model on
         training set. An exception is thrown if
         `trainingSummary is None`.
         """
@@ -2272,7 +2270,7 @@ class GeneralizedLinearRegressionModel(_JavaRegressionModel, _GeneralizedLinearR
     @since("2.0.0")
     def summary(self):
         """
-        Gets summary (e.g. residuals, deviance, pValues) of model on
+        Gets summary (residuals, deviance, p-values) of model on
         training set. An exception is thrown if
         `trainingSummary is None`.
         """

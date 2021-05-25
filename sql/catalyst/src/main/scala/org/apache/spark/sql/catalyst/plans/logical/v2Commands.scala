@@ -287,14 +287,18 @@ case class DropNamespace(
  */
 case class DescribeNamespace(
     namespace: LogicalPlan,
-    extended: Boolean) extends Command {
+    extended: Boolean,
+    override val output: Seq[Attribute] = DescribeNamespace.getOutputAttr) extends Command {
   override def children: Seq[LogicalPlan] = Seq(namespace)
 
-  override def output: Seq[Attribute] = Seq(
-    AttributeReference("name", StringType, nullable = false,
-      new MetadataBuilder().putString("comment", "name of the column").build())(),
-    AttributeReference("value", StringType, nullable = true,
-      new MetadataBuilder().putString("comment", "value of the column").build())())
+}
+
+object DescribeNamespace {
+  def getOutputAttr: Seq[Attribute] = Seq(
+    AttributeReference("info_name", StringType, nullable = false,
+      new MetadataBuilder().putString("comment", "name of the namespace info").build())(),
+    AttributeReference("info_value", StringType, nullable = true,
+      new MetadataBuilder().putString("comment", "value of the namespace info").build())())
 }
 
 /**
@@ -324,7 +328,6 @@ case class ShowNamespaces(
     pattern: Option[String],
     override val output: Seq[Attribute] = ShowNamespaces.OUTPUT) extends Command {
   override def children: Seq[LogicalPlan] = Seq(namespace)
-  override def producedAttributes: AttributeSet = outputSet
 }
 
 object ShowNamespaces {
@@ -337,9 +340,13 @@ object ShowNamespaces {
 case class DescribeRelation(
     relation: LogicalPlan,
     partitionSpec: TablePartitionSpec,
-    isExtended: Boolean) extends Command {
+    isExtended: Boolean,
+    override val output: Seq[Attribute] = DescribeRelation.getOutputAttrs) extends Command {
   override def children: Seq[LogicalPlan] = Seq(relation)
-  override def output: Seq[Attribute] = DescribeCommandSchema.describeTableAttributes()
+}
+
+object DescribeRelation {
+  def getOutputAttrs: Seq[Attribute] = DescribeCommandSchema.describeTableAttributes()
 }
 
 /**
