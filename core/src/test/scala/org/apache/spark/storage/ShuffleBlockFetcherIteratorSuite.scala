@@ -43,6 +43,9 @@ import org.apache.spark.util.Utils
 
 class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodTester {
 
+  private def answerFetchBlocks(answer: Answer[Unit]): Unit =
+    when(transfer.fetchBlocks(any(), any(), any(), any(), any(), any())).thenAnswer(answer)
+
   private def doReturn(value: Any) = org.mockito.Mockito.doReturn(value, Seq.empty: _*)
 
   // Some of the tests are quite tricky because we are testing the cleanup behavior
