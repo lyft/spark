@@ -37,7 +37,7 @@ import org.apache.spark.network._
 import org.apache.spark.network.buffer.{FileSegmentManagedBuffer, ManagedBuffer}
 import org.apache.spark.network.shuffle.{BlockFetchingListener, DownloadFileManager, ExternalBlockStoreClient}
 import org.apache.spark.network.util.LimitedInputStream
-import org.apache.spark.shuffle.FetchFailedException
+import org.apache.spark.shuffle.{FetchFailedException, ShuffleReadMetricsReporter}
 import org.apache.spark.storage.ShuffleBlockFetcherIterator.FetchBlockInfo
 import org.apache.spark.util.Utils
 
@@ -48,6 +48,9 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
 
   private def answerFetchBlocks(answer: Answer[Unit]): Unit =
     when(transfer.fetchBlocks(any(), any(), any(), any(), any(), any())).thenAnswer(answer)
+
+  private def verifyFetchBlocksInvocationCount(expectedCount: Int): Unit =
+    verify(transfer, times(expectedCount)).fetchBlocks(any(), any(), any(), any(), any(), any())
 
   private def doReturn(value: Any) = org.mockito.Mockito.doReturn(value, Seq.empty: _*)
 
@@ -153,6 +156,51 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
     wrappedInputStream.close() // close should be idempotent
     verify(buffer, times(1)).release()
     verify(wrappedInputStream.invokePrivate(delegateAccess()), times(1)).close()
+  }
+
+  // scalastyle:off argcount
+  private def createShuffleBlockIteratorWithDefaults(
+      blocksByAddress: Map[BlockManagerId, Seq[(BlockId, Long, Int)]],
+      taskContext: Option[TaskContext] = None,
+      streamWrapperLimitSize: Option[Long] = None,
+      blockManager: Option[BlockManager] = None,
+      maxBytesInFlight: Long = Long.MaxValue,
+      maxReqsInFlight: Int = Int.MaxValue,
+      maxBlocksInFlightPerAddress: Int = Int.MaxValue,
+      maxReqSizeShuffleToMem: Int = Int.MaxValue,
+      maxAttemptsOnNettyOOM: Int = 10,
+      detectCorrupt: Boolean = true,
+      detectCorruptUseExtraMemory: Boolean = true,
+      shuffleMetrics: Option[ShuffleReadMetricsReporter] = None,
+      doBatchFetch: Boolean = false): ShuffleBlockFetcherIterator = {
+    val tContext = taskContext.getOrElse(TaskContext.empty())
+    new ShuffleBlockFetcherIterator(
+      tContext,
+      transfer,
+      blockManager.getOrElse(createMockBlockManager()),
+      blocksByAddress.toIterator,
+      (_, in) => streamWrapperLimitSize.map(new LimitedInputStream(in, _)).getOrElse(in),
+      maxBytesInFlight,
+      maxReqsInFlight,
+      maxBlocksInFlightPerAddress,
+      maxReqSizeShuffleToMem,
+      maxAttemptsOnNettyOOM,
+      detectCorrupt,
+      detectCorruptUseExtraMemory,
+      shuffleMetrics.getOrElse(tContext.taskMetrics().createTempShuffleReadMetrics()),
+      doBatchFetch)
+  }
+
+  // scalastyle:on argcount
+  /**
+   * Convert a list of block IDs into a list of blocks with metadata, assuming all blocks have the
+   * same size and index.
+   */
+  private def toBlockList(
+      blockIds: Traversable[BlockId],
+      blockSize: Long,
+      blockMapIndex: Int): Seq[(BlockId, Long, Int)] = {
+    blockIds.map(blockId => (blockId, blockSize, blockMapIndex)).toSeq
   }
 
   test("successful 3 local + 4 host local + 2 remote reads") {
