@@ -29,6 +29,7 @@ import io.netty.util.internal.OutOfDirectMemoryError
 import org.mockito.ArgumentMatchers.{any, eq => meq}
 import org.mockito.Mockito.{mock, times, verify, when}
 import org.mockito.invocation.InvocationOnMock
+import org.mockito.stubbing.Answer
 import org.scalatest.PrivateMethodTester
 
 import org.apache.spark.{SparkFunSuite, TaskContext}
@@ -42,6 +43,8 @@ import org.apache.spark.util.Utils
 
 
 class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodTester {
+
+  private var transfer: BlockTransferService = _
 
   private def answerFetchBlocks(answer: Answer[Unit]): Unit =
     when(transfer.fetchBlocks(any(), any(), any(), any(), any(), any())).thenAnswer(answer)
@@ -206,8 +209,9 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       (_, in) => in,
       48 * 1024 * 1024,
       Int.MaxValue,
+      Int.MaxValue,      
       Int.MaxValue,
-      Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -280,6 +284,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -311,6 +316,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue, // set maxBlocksInFlightPerAddress to Int.MaxValue
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -353,6 +359,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       2, // set maxBlocksInFlightPerAddress to 2
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -433,6 +440,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -490,6 +498,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -544,6 +553,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       2,
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -608,6 +618,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -675,6 +686,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -762,6 +774,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       true,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -831,6 +844,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       true,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -896,6 +910,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       true,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -956,6 +971,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -1015,6 +1031,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
         maxReqsInFlight = Int.MaxValue,
         maxBlocksInFlightPerAddress = Int.MaxValue,
         maxReqSizeShuffleToMem = 200,
+        maxAttemptsOnNettyOOM = 10,
         detectCorrupt = true,
         false,
         taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -1061,6 +1078,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
