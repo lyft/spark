@@ -25,9 +25,11 @@ import java.util.concurrent.{CompletableFuture, Semaphore}
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 
+import io.netty.util.internal.OutOfDirectMemoryError
 import org.mockito.ArgumentMatchers.{any, eq => meq}
 import org.mockito.Mockito.{mock, times, verify, when}
 import org.mockito.invocation.InvocationOnMock
+import org.mockito.stubbing.Answer
 import org.scalatest.PrivateMethodTester
 
 import org.apache.spark.{SparkFunSuite, TaskContext}
@@ -35,12 +37,20 @@ import org.apache.spark.network._
 import org.apache.spark.network.buffer.{FileSegmentManagedBuffer, ManagedBuffer}
 import org.apache.spark.network.shuffle.{BlockFetchingListener, DownloadFileManager, ExternalBlockStoreClient}
 import org.apache.spark.network.util.LimitedInputStream
-import org.apache.spark.shuffle.FetchFailedException
+import org.apache.spark.shuffle.{FetchFailedException, ShuffleReadMetricsReporter}
 import org.apache.spark.storage.ShuffleBlockFetcherIterator.FetchBlockInfo
 import org.apache.spark.util.Utils
 
 
 class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodTester {
+
+  private var transfer: BlockTransferService = _
+
+  private def answerFetchBlocks(answer: Answer[Unit]): Unit =
+    when(transfer.fetchBlocks(any(), any(), any(), any(), any(), any())).thenAnswer(answer)
+
+  private def verifyFetchBlocksInvocationCount(expectedCount: Int): Unit =
+    verify(transfer, times(expectedCount)).fetchBlocks(any(), any(), any(), any(), any(), any())
 
   private def doReturn(value: Any) = org.mockito.Mockito.doReturn(value, Seq.empty: _*)
 
@@ -64,6 +74,31 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
         }
       })
     transfer
+  }
+
+  /** Configures `transfer` (mock [[BlockTransferService]]) which mimics the Netty OOM issue. */
+  private def configureNettyOOMMockTransfer(
+      data: Map[BlockId, ManagedBuffer],
+      oomBlockIndex: Int,
+      throwOnce: Boolean): Unit = {
+    var hasThrowOOM = false
+    answerFetchBlocks { invocation =>
+      val blocks = invocation.getArguments()(3).asInstanceOf[Array[String]]
+      val listener = invocation.getArgument[BlockFetchingListener](4)
+      for ((blockId, i) <- blocks.zipWithIndex) {
+        if (!hasThrowOOM && i == oomBlockIndex) {
+          hasThrowOOM = throwOnce
+          val ctor = classOf[OutOfDirectMemoryError]
+            .getDeclaredConstructor(classOf[java.lang.String])
+          ctor.setAccessible(true)
+          listener.onBlockFetchFailure(blockId, ctor.newInstance("failed to allocate memory"))
+        } else if (data.contains(BlockId(blockId))) {
+          listener.onBlockFetchSuccess(blockId, data(BlockId(blockId)))
+        } else {
+          listener.onBlockFetchFailure(blockId, new BlockNotFoundException(blockId))
+        }
+      }
+    }
   }
 
   private def createMockBlockManager(): BlockManager = {
@@ -123,6 +158,51 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
     verify(wrappedInputStream.invokePrivate(delegateAccess()), times(1)).close()
   }
 
+  // scalastyle:off argcount
+  private def createShuffleBlockIteratorWithDefaults(
+      blocksByAddress: Map[BlockManagerId, Seq[(BlockId, Long, Int)]],
+      taskContext: Option[TaskContext] = None,
+      streamWrapperLimitSize: Option[Long] = None,
+      blockManager: Option[BlockManager] = None,
+      maxBytesInFlight: Long = Long.MaxValue,
+      maxReqsInFlight: Int = Int.MaxValue,
+      maxBlocksInFlightPerAddress: Int = Int.MaxValue,
+      maxReqSizeShuffleToMem: Int = Int.MaxValue,
+      maxAttemptsOnNettyOOM: Int = 10,
+      detectCorrupt: Boolean = true,
+      detectCorruptUseExtraMemory: Boolean = true,
+      shuffleMetrics: Option[ShuffleReadMetricsReporter] = None,
+      doBatchFetch: Boolean = false): ShuffleBlockFetcherIterator = {
+    val tContext = taskContext.getOrElse(TaskContext.empty())
+    new ShuffleBlockFetcherIterator(
+      tContext,
+      transfer,
+      blockManager.getOrElse(createMockBlockManager()),
+      blocksByAddress.toIterator,
+      (_, in) => streamWrapperLimitSize.map(new LimitedInputStream(in, _)).getOrElse(in),
+      maxBytesInFlight,
+      maxReqsInFlight,
+      maxBlocksInFlightPerAddress,
+      maxReqSizeShuffleToMem,
+      maxAttemptsOnNettyOOM,
+      detectCorrupt,
+      detectCorruptUseExtraMemory,
+      shuffleMetrics.getOrElse(tContext.taskMetrics().createTempShuffleReadMetrics()),
+      doBatchFetch)
+  }
+
+  // scalastyle:on argcount
+  /**
+   * Convert a list of block IDs into a list of blocks with metadata, assuming all blocks have the
+   * same size and index.
+   */
+  private def toBlockList(
+      blockIds: Traversable[BlockId],
+      blockSize: Long,
+      blockMapIndex: Int): Seq[(BlockId, Long, Int)] = {
+    blockIds.map(blockId => (blockId, blockSize, blockMapIndex)).toSeq
+  }
+
   test("successful 3 local + 4 host local + 2 remote reads") {
     val blockManager = createMockBlockManager()
     val localBmId = blockManager.blockManagerId
@@ -177,8 +257,9 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       (_, in) => in,
       48 * 1024 * 1024,
       Int.MaxValue,
+      Int.MaxValue,      
       Int.MaxValue,
-      Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -251,6 +332,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -282,6 +364,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue, // set maxBlocksInFlightPerAddress to Int.MaxValue
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -324,6 +407,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       2, // set maxBlocksInFlightPerAddress to 2
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -404,6 +488,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -461,6 +546,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -515,6 +601,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       2,
       Int.MaxValue,
+      10,
       true,
       false,
       metrics,
@@ -579,6 +666,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -646,6 +734,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -733,6 +822,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       true,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -802,6 +892,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       true,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -867,6 +958,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       true,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -927,6 +1019,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -986,6 +1079,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
         maxReqsInFlight = Int.MaxValue,
         maxBlocksInFlightPerAddress = Int.MaxValue,
         maxReqSizeShuffleToMem = 200,
+        maxAttemptsOnNettyOOM = 10,
         detectCorrupt = true,
         false,
         taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -1032,6 +1126,7 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
       Int.MaxValue,
       Int.MaxValue,
       Int.MaxValue,
+      10,
       true,
       false,
       taskContext.taskMetrics.createTempShuffleReadMetrics(),
@@ -1059,5 +1154,109 @@ class ShuffleBlockFetcherIteratorSuite extends SparkFunSuite with PrivateMethodT
     assert(mergedBlockId.startReduceId === bId1.startReduceId)
     assert(mergedBlockId.endReduceId === bId3.reduceId + 1)
     assert(mergedBlock.size === inputBlocks.map(_.size).sum)
+  }
+
+  test("SPARK-27991: defer shuffle fetch request (one block) on Netty OOM") {
+    // Make sure remote blocks would return
+    val remoteBmId = BlockManagerId("test-remote-client-1", "test-remote-host", 2)
+    val remoteBlocks = Map[BlockId, ManagedBuffer](
+      ShuffleBlockId(0, 0, 0) -> createMockManagedBuffer(),
+      ShuffleBlockId(0, 1, 0) -> createMockManagedBuffer())
+
+    configureNettyOOMMockTransfer(remoteBlocks, oomBlockIndex = 0, throwOnce = true)
+
+    val blocksByAddress = Map[BlockManagerId, Seq[(BlockId, Long, Int)]](
+      (remoteBmId, toBlockList(remoteBlocks.keys, 1, 1))
+    )
+
+    val iterator = createShuffleBlockIteratorWithDefaults(
+      blocksByAddress = blocksByAddress,
+      // set maxBlocksInFlightPerAddress=1 so these 2 blocks
+      // would be grouped into 2 separate requests
+      maxBlocksInFlightPerAddress = 1)
+
+    for (i <- 0 until remoteBlocks.size) {
+      assert(iterator.hasNext,
+        s"iterator should have ${remoteBlocks.size} elements but actually has $i elements")
+      val (blockId, inputStream) = iterator.next()
+
+      // Make sure we release buffers when a wrapped input stream is closed.
+      val mockBuf = remoteBlocks(blockId)
+      verifyBufferRelease(mockBuf, inputStream)
+    }
+
+    // 1st fetch request (contains 1 block) would fail due to Netty OOM
+    // 2nd fetch request retry the block of the 1st fetch request
+    // 3rd fetch request is a normal fetch
+    verifyFetchBlocksInvocationCount(3)
+    assert(!ShuffleBlockFetcherIterator.isNettyOOMOnShuffle.get())
+  }
+
+  Seq(0, 1, 2).foreach { oomBlockIndex =>
+    test(s"SPARK-27991: defer shuffle fetch request (multiple blocks) on Netty OOM, " +
+      s"oomBlockIndex=$oomBlockIndex") {
+      val blockManager = createMockBlockManager()
+
+      // Make sure remote blocks would return
+      val remoteBmId = BlockManagerId("test-remote-client-1", "test-remote-host", 2)
+      val remoteBlocks = Map[BlockId, ManagedBuffer](
+        ShuffleBlockId(0, 0, 0) -> createMockManagedBuffer(),
+        ShuffleBlockId(0, 1, 0) -> createMockManagedBuffer(),
+        ShuffleBlockId(0, 2, 0) -> createMockManagedBuffer())
+
+      configureNettyOOMMockTransfer(remoteBlocks, oomBlockIndex = oomBlockIndex, throwOnce = true)
+
+      val blocksByAddress = Map[BlockManagerId, Seq[(BlockId, Long, Int)]](
+        (remoteBmId, toBlockList(remoteBlocks.keys, 1L, 1))
+      )
+
+      val iterator = createShuffleBlockIteratorWithDefaults(
+        blocksByAddress = blocksByAddress,
+        // set maxBlocksInFlightPerAddress=3, so these 3 blocks would be grouped into 1 request
+        maxBlocksInFlightPerAddress = 3)
+
+      for (i <- 0 until remoteBlocks.size) {
+        assert(iterator.hasNext,
+          s"iterator should have ${remoteBlocks.size} elements but actually has $i elements")
+        val (blockId, inputStream) = iterator.next()
+
+        // Make sure we release buffers when a wrapped input stream is closed.
+        val mockBuf = remoteBlocks(blockId)
+        verifyBufferRelease(mockBuf, inputStream)
+      }
+
+      // 1st fetch request (contains 3 blocks) would fail on the someone block due to Netty OOM
+      // but succeed for the remaining blocks
+      // 2nd fetch request retry the failed block of the 1st fetch
+      verifyFetchBlocksInvocationCount(2)
+      assert(!ShuffleBlockFetcherIterator.isNettyOOMOnShuffle.get())
+    }
+  }
+
+  test("SPARK-27991: block shouldn't retry endlessly on Netty OOM") {
+    val blockManager = createMockBlockManager()
+
+    // Make sure remote blocks would return
+    val remoteBmId = BlockManagerId("test-remote-client-1", "test-remote-host", 2)
+    val remoteBlocks = Map[BlockId, ManagedBuffer](
+      ShuffleBlockId(0, 0, 0) -> createMockManagedBuffer(),
+      ShuffleBlockId(0, 1, 0) -> createMockManagedBuffer())
+
+    configureNettyOOMMockTransfer(remoteBlocks, oomBlockIndex = 0, throwOnce = false)
+
+    val blocksByAddress = Map[BlockManagerId, Seq[(BlockId, Long, Int)]](
+      (remoteBmId, toBlockList(remoteBlocks.keys, 1L, 1))
+    )
+
+    val iterator = createShuffleBlockIteratorWithDefaults(
+      blocksByAddress = blocksByAddress,
+      // set maxBlocksInFlightPerAddress=1 so these 2 blocks
+      // would be grouped into 2 separate requests
+      maxBlocksInFlightPerAddress = 1)
+
+    val e = intercept[FetchFailedException] {
+      iterator.next()
+    }
+    assert(e.getMessage.contains("fetch failed after 10 retries due to Netty OOM"))
   }
 }
