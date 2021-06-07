@@ -82,6 +82,7 @@ case class InsertIntoHiveTable(
    * `org.apache.hadoop.mapred.OutputFormat` provided by the table definition.
    */
   override def run(sparkSession: SparkSession, child: SparkPlan): Seq[Row] = {
+    Utils.logStackTrace("run method in InsertIntoHiveTable.scala")
     val externalCatalog = sparkSession.sharedState.externalCatalog
     val hadoopConf = sparkSession.sessionState.newHadoopConf()
 
@@ -128,6 +129,7 @@ case class InsertIntoHiveTable(
       tableDesc: TableDesc,
       tmpLocation: Path,
       child: SparkPlan): Unit = {
+    Utils.logStackTrace("processInsert method in InsertIntoHiveTable.scala")
     val fileSinkConf = new FileSinkDesc(tmpLocation.toString, tableDesc, false)
 
     val numDynamicPartitions = partition.values.count(_.isEmpty)

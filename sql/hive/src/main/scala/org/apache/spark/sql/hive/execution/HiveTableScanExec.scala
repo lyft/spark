@@ -201,6 +201,7 @@ case class HiveTableScanExec(
   protected override def doExecute(): RDD[InternalRow] = {
     // Using dummyCallSite, as getCallSite can turn out to be expensive with
     // multiple partitions.
+    Utils.logStackTrace("doExecute method in HiveTableScanExec.scala")
     val rdd = if (!relation.isPartitioned) {
       Utils.withDummyCallSite(sqlContext.sparkContext) {
         hadoopReader.makeRDDForTable(hiveQlTable)

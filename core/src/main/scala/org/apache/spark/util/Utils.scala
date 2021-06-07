@@ -1581,6 +1581,14 @@ private[spark] object Utils extends Logging {
     CallSite(shortForm, longForm)
   }
 
+  def logStackTrace(topString String): Unit = {
+    StringBuilder sb = new StringBuilder();
+    Thread.currentThread.getStackTrace().foreach { ste: StackTraceElement =>
+      sb.append("\n\t" + e.getClassName + "." + e.getMethodName + "(" + e.getFileName + ":" + e.getLineNumber + ")")
+    }
+    logInfo("StackTrace for " + topString + sb.toString)
+  }
+
   private var compressedLogFileLengthCache: LoadingCache[String, java.lang.Long] = null
   private def getCompressedLogFileLengthCache(
       sparkConf: SparkConf): LoadingCache[String, java.lang.Long] = this.synchronized {

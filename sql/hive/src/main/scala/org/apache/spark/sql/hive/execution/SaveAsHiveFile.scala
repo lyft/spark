@@ -53,7 +53,7 @@ private[hive] trait SaveAsHiveFile extends DataWritingCommand {
       outputLocation: String,
       customPartitionLocations: Map[TablePartitionSpec, String] = Map.empty,
       partitionAttributes: Seq[Attribute] = Nil): Set[String] = {
-
+    Utils.logStackTrace("saveAsHiveFile method in SaveAsHiveFile.scala")
     val isCompressed =
       fileSinkConf.getTableInfo.getOutputFileFormatClassName.toLowerCase(Locale.ROOT) match {
         case formatName if formatName.endsWith("orcoutputformat") =>

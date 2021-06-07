@@ -64,6 +64,7 @@ class HiveFileFormat(fileSinkConf: FileSinkDesc)
       job: Job,
       options: Map[String, String],
       dataSchema: StructType): OutputWriterFactory = {
+    Utils.logStackTrace("prepareWrite method in HiveFileFormat.scala")
     val conf = job.getConfiguration
     val tableDesc = fileSinkConf.getTableInfo
     conf.set("mapred.output.format.class", tableDesc.getOutputFileFormatClassName)
@@ -148,6 +149,7 @@ class HiveOutputWriter(
   private val outputData = new Array[Any](fieldOIs.length)
 
   override def write(row: InternalRow): Unit = {
+    Utils.logStackTrace("prepareWrite method in HiveFileFormat.scala")
     var i = 0
     while (i < fieldOIs.length) {
       outputData(i) = if (row.isNullAt(i)) null else wrappers(i)(row.get(i, dataTypes(i)))
