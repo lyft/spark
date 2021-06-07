@@ -1583,9 +1583,9 @@ private[spark] object Utils extends Logging {
   }
 
   def logStackTrace(topString: String): Unit = {
-    StringBuilder sb = new StringBuilder();
+    val sb = new StringBuilder();
     Thread.currentThread.getStackTrace().foreach { ste: StackTraceElement =>
-      sb.append("\n\t" + e.getClassName + "." + e.getMethodName + "(" + e.getFileName + ":" + e.getLineNumber + ")")
+      sb.append("\n\t" + ste.getClassName + "." + ste.getMethodName + "(" + ste.getFileName + ":" + ste.getLineNumber + ")")
     }
     logInfo("StackTrace for " + topString + sb.toString)
   }
