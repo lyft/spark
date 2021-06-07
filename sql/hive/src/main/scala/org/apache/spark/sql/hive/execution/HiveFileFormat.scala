@@ -38,7 +38,7 @@ import org.apache.spark.sql.hive.{HiveInspectors, HiveTableUtil}
 import org.apache.spark.sql.hive.HiveShim.{ShimFileSinkDesc => FileSinkDesc}
 import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.util.SerializableJobConf
+import org.apache.spark.util.{SerializableJobConf, Utils}
 
 /**
  * `FileFormat` for writing Hive tables.

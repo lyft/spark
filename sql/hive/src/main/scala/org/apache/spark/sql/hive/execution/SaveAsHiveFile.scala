@@ -39,6 +39,7 @@ import org.apache.spark.sql.execution.datasources.FileFormatWriter
 import org.apache.spark.sql.hive.HiveExternalCatalog
 import org.apache.spark.sql.hive.HiveShim.{ShimFileSinkDesc => FileSinkDesc}
 import org.apache.spark.sql.hive.client.HiveVersion
+import org.apache.spark.util.Utils
 
 // Base trait from which all hive insert statement physical execution extends.
 private[hive] trait SaveAsHiveFile extends DataWritingCommand {
