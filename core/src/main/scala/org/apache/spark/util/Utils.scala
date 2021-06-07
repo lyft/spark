@@ -1,3 +1,4 @@
+
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -1581,7 +1582,7 @@ private[spark] object Utils extends Logging {
     CallSite(shortForm, longForm)
   }
 
-  def logStackTrace(topString String): Unit = {
+  def logStackTrace(topString: String): Unit = {
     StringBuilder sb = new StringBuilder();
     Thread.currentThread.getStackTrace().foreach { ste: StackTraceElement =>
       sb.append("\n\t" + e.getClassName + "." + e.getMethodName + "(" + e.getFileName + ":" + e.getLineNumber + ")")
