@@ -212,13 +212,13 @@ case class RelationConversions(
           if query.resolved && DDLUtils.isHiveTable(r.tableMeta) &&
             (!r.isPartitioned || SQLConf.get.getConf(HiveUtils.CONVERT_INSERTING_PARTITIONED_TABLE))
             && isConvertible(r) =>
-        InsertIntoStatement(metastoreCatalog.convert(r), partition, cols,
+        InsertIntoStatement(metastoreCatalog.convert(r, isWrite = true), partition, cols,
           query, overwrite, ifPartitionNotExists)
 
       // Read path
       case relation: HiveTableRelation
           if DDLUtils.isHiveTable(relation.tableMeta) && isConvertible(relation) =>
-        metastoreCatalog.convert(relation)
+        metastoreCatalog.convert(relation, isWrite = false)
 
       // CTAS
       case CreateTable(tableDesc, mode, Some(query))
