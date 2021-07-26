@@ -129,7 +129,7 @@ abstract class FileWriteBuilder(
       allColumns = allColumns,
       dataColumns = allColumns,
       partitionColumns = Seq.empty,
-      bucketIdExpression = None,
+      bucketSpec = None,
       path = pathName,
       customPartitionLocations = Map.empty,
       maxRecordsPerFile = caseInsensitiveOptions.get("maxRecordsPerFile").map(_.toLong)

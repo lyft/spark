@@ -22,7 +22,7 @@ import java.io.File
 import org.apache.spark.sql.{AnalysisException, DataFrame, QueryTest}
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
-+import org.apache.spark.sql.catalyst.expressions.{Expression, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.{Expression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.plans.physical.HashPartitioning
 import org.apache.spark.sql.execution.datasources.BucketingUtils
 import org.apache.spark.sql.functions._
