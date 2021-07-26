@@ -151,7 +151,8 @@ private[hive] class HiveMetastoreCatalog(sparkSession: SparkSession) extends Log
           relation,
           options,
           classOf[org.apache.spark.sql.hive.orc.OrcFileFormat],
-          "orc")
+          "orc",
+          isWrite)
       }
     }
   }
