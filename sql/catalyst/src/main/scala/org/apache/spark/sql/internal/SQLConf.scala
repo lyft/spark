@@ -3365,6 +3365,14 @@ object SQLConf {
     .intConf
     .createWithDefault(0)
 
+  val READ_PARTITION_WITH_SUBDIRECTORY_ENABLED =
+    buildConf("spark.sql.sources.readPartitionWithSubdirectory.enabled")
+      .doc("When set to true, Spark SQL could read the files of " +
+        " partitioned hive table from subdirectories under root path of table")
+      .booleanConf
+      .createWithDefault(true)
+
+
   /**
    * Holds information about keys that have been deprecated.
    *
@@ -4079,6 +4087,9 @@ class SQLConf extends Serializable with Logging {
   def decorrelateInnerQueryEnabled: Boolean = getConf(SQLConf.DECORRELATE_INNER_QUERY_ENABLED)
 
   def maxConcurrentOutputFileWriters: Int = getConf(SQLConf.MAX_CONCURRENT_OUTPUT_FILE_WRITERS)
+  
+  def readPartitionWithSubdirectoryEnabled: Boolean =
+    getConf(READ_PARTITION_WITH_SUBDIRECTORY_ENABLED)
 
   /** ********************** SQLConf functionality methods ************ */
 
