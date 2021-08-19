@@ -99,18 +99,20 @@ class InMemoryFileIndex(
       new mutable.LinkedHashMap[Path, FileStatus]() ++= files.map(f => f.getPath -> f)
     cachedLeafDirToChildrenFiles =
       if (readPartitionWithSubdirectoryEnabled) {
-        files.toArray.groupBy(file => getRootPathsLeafDir(file.getPath.getParent))
+        files.toArray.groupBy(file => getRootPathsLeafDir(file.getPath.getParent, file.getPath))
       } else {
         files.toArray.groupBy(_.getPath.getParent)
       }
     cachedPartitionSpec = null
   }
 
-  private def getRootPathsLeafDir(path: Path): Path = {
-    if (rootPaths.contains(path)) {
+  private def getRootPathsLeafDir(path: Path, child: Path): Path = {
+    if (rootPaths.contains(child)) {
+      path
+    } else if (rootPaths.contains(path)) {
       path
     } else {
-      getRootPathsLeafDir(path.getParent)
+      getRootPathsLeafDir(path.getParent, path)
     }
   }
 
