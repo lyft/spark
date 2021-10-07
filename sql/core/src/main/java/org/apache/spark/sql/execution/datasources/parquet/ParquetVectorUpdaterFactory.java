@@ -72,11 +72,8 @@ public class ParquetVectorUpdaterFactory {
       case INT32:
         if (sparkType == DataTypes.IntegerType || canReadAsIntDecimal(descriptor, sparkType)) {
           return new IntegerUpdater();
-        } else if (sparkType == DataTypes.LongType && isUnsignedIntTypeMatched(32)) {
-          // In `ParquetToSparkSchemaConverter`, we map parquet UINT32 to our LongType.
-          // For unsigned int32, it stores as plain signed int32 in Parquet when dictionary
-          // fallbacks. We read them as long values.
-          return new UnsignedIntegerUpdater();
+        } else if (sparkType == DataTypes.LongType) {
+          return new LongUpdater();
         } else if (sparkType == DataTypes.ByteType) {
           return new ByteUpdater();
         } else if (sparkType == DataTypes.ShortType) {
