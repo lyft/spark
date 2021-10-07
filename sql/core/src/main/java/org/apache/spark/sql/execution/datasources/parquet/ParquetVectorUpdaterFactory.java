@@ -73,7 +73,7 @@ public class ParquetVectorUpdaterFactory {
         if (sparkType == DataTypes.IntegerType || canReadAsIntDecimal(descriptor, sparkType)) {
           return new IntegerUpdater();
         } else if (sparkType == DataTypes.LongType) {
-          return new LongUpdater();
+          return new LongIntegerUpdater();
         } else if (sparkType == DataTypes.ByteType) {
           return new ByteUpdater();
         } else if (sparkType == DataTypes.ShortType) {
@@ -246,7 +246,7 @@ public class ParquetVectorUpdaterFactory {
     }
   }
 
-  private static class UnsignedIntegerUpdater implements ParquetVectorUpdater {
+  private static class LongIntegerUpdater implements ParquetVectorUpdater {
     @Override
     public void readValues(
         int total,
@@ -266,7 +266,7 @@ public class ParquetVectorUpdaterFactory {
         int offset,
         WritableColumnVector values,
         VectorizedValuesReader valuesReader) {
-      values.putLong(offset, Integer.toUnsignedLong(valuesReader.readInteger()));
+      values.putLong(offset, valuesReader.readInteger());
     }
 
     @Override
