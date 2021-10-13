@@ -253,7 +253,7 @@ public class ParquetVectorUpdaterFactory {
         int offset,
         WritableColumnVector values,
         VectorizedValuesReader valuesReader) {
-      valuesReader.readUnsignedIntegers(total, values, offset);
+      valuesReader.readIntegersAsLongs(total, values, offset);
     }
 
     @Override
