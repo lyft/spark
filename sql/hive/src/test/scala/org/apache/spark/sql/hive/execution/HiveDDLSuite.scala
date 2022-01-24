@@ -821,6 +821,36 @@ class HiveDDLSuite
       s"$tableName is a table. '$cmdName' expects a view. Please use ALTER TABLE instead.")
   }
 
+  ignore("create table - SET TBLPROPERTIES EXTERNAL to TRUE") {
+    val tabName = "tab1"
+    withTable(tabName) {
+      assertAnalysisError(
+        s"CREATE TABLE $tabName (height INT, length INT) TBLPROPERTIES('EXTERNAL'='TRUE')",
+        "Cannot set or change the preserved property key: 'EXTERNAL'")
+    }
+  }
+
+  ignore("alter table - SET TBLPROPERTIES EXTERNAL to TRUE") {
+    val tabName = "tab1"
+    withTable(tabName) {
+      val catalog = spark.sessionState.catalog
+      sql(s"CREATE TABLE $tabName (height INT, length INT)")
+      assert(
+        catalog.getTableMetadata(TableIdentifier(tabName)).tableType == CatalogTableType.MANAGED)
+      assertAnalysisError(
+        s"ALTER TABLE $tabName SET TBLPROPERTIES ('EXTERNAL' = 'TRUE')",
+        "Cannot set or change the preserved property key: 'EXTERNAL'")
+      // The table type is not changed to external
+      assert(
+        catalog.getTableMetadata(TableIdentifier(tabName)).tableType == CatalogTableType.MANAGED)
+      // The table property is case sensitive. Thus, external is allowed
+      sql(s"ALTER TABLE $tabName SET TBLPROPERTIES ('external' = 'TRUE')")
+      // The table type is not changed to external
+      assert(
+        catalog.getTableMetadata(TableIdentifier(tabName)).tableType == CatalogTableType.MANAGED)
+    }
+  }
+
   test("alter views and alter table - misuse") {
     val tabName = "tab1"
     withTable(tabName) {
