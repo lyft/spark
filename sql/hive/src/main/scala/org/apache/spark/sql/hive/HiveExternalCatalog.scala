@@ -139,6 +139,7 @@ private[spark] class HiveExternalCatalog(conf: SparkConf, hadoopConf: Configurat
         s"as table property keys may not start with '$SPARK_SQL_PREFIX': " +
         invalidKeys.mkString("[", ", ", "]"))
     }
+    // To keep the parity with Hive, the check for external table properties has been removed.
   }
 
   /**
