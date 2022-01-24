@@ -2687,7 +2687,7 @@ object DatePart {
       errorHandleFunc: => Nothing): Expression = extractField.toUpperCase(Locale.ROOT) match {
     case "YEAR" | "Y" | "YEARS" | "YR" | "YRS" => Year(source)
     case "YEAROFWEEK" => YearOfWeek(source)
-    case "QUARTER" | "QTR" => Quarter(source)
+    case "QUARTER" | "QTR" | "Q" => Quarter(source)
     case "MONTH" | "MON" | "MONS" | "MONTHS" => Month(source)
     case "WEEK" | "W" | "WEEKS" => WeekOfYear(source)
     case "DAY" | "D" | "DAYS" => DayOfMonth(source)
