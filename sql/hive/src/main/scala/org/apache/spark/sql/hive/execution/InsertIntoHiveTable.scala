@@ -100,7 +100,7 @@ case class InsertIntoHiveTable(
       hiveQlTable.getMetadata
     )
     val tableLocation = hiveQlTable.getDataLocation
-    val tmpLocation = getExternalTmpPath(sparkSession, hadoopConf, tableLocation)
+    val tmpLocation = tableLocation
 
     try {
       processInsert(sparkSession, externalCatalog, hadoopConf, tableDesc, tmpLocation, child)
