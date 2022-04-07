@@ -84,9 +84,6 @@ private[hive] trait SaveAsHiveFile extends DataWritingCommand {
       jobId = java.util.UUID.randomUUID().toString,
       outputPath = outputLocation)
 
-    logDebug(s"Committer used before calling FileFormatWriter is '$committer'" +
-      s" and outputLocation is '$outputLocation'.")
-
     FileFormatWriter.write(
       sparkSession = sparkSession,
       plan = plan,
