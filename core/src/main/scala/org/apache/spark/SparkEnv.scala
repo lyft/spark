@@ -18,7 +18,7 @@
 package org.apache.spark
 
 import java.io.File
-import java.net.Socket
+import java.net.{InetAddress, Socket}
 import java.util.Locale
 
 import scala.collection.JavaConverters._
@@ -207,11 +207,15 @@ object SparkEnv extends Logging {
       numCores: Int,
       ioEncryptionKey: Option[Array[Byte]],
       isLocal: Boolean): SparkEnv = {
+    var hostnameFinal = hostname
+    if (conf.getBoolean("spark.lyft.resolve", false)) {
+      hostnameFinal = InetAddress.getByName(hostname).getHostAddress
+    }
     val env = create(
       conf,
       executorId,
       bindAddress,
-      hostname,
+      hostnameFinal,
       None,
       isLocal,
       numCores,

@@ -2220,8 +2220,15 @@ private[spark] object Utils
    * privileged ports.
    */
   def userPort(base: Int, offset: Int): Int = {
-    (base + offset - 1024) % (65536 - 1024) + 1024
+      (base + offset - 1024) % (65536 - 1024) + 1024
   }
+
+  def randPort(base: Int, offset: Int, maxRand: Int): Int = {
+      val rand = new scala.util.Random
+      val r = rand.nextInt(maxRand)
+      (base + offset + r) % 65535
+  }
+
 
   /**
    * Attempt to start a service on the given port, or fail after a number of attempts.
@@ -2249,6 +2256,10 @@ private[spark] object Utils
       // Do not increment port if startPort is 0, which is treated as a special port
       val tryPort = if (startPort == 0) {
         startPort
+      } else if (offset > 0 && conf.getInt("spark.lyft.maxrand", 0) > 0)
+      {
+        logInfo(s"Using randPort")
+        randPort(startPort, offset, conf.getInt("spark.lyft.maxrand", 0))
       } else {
         userPort(startPort, offset)
       }
