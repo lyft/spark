@@ -231,8 +231,7 @@ object TableOutputResolver {
   }
 
   private def canCauseCastOverflow(cast: AnsiCast): Boolean = {
-    containsIntegralOrDecimalType(cast.dataType) &&
-      !Cast.canUpCast(cast.child.dataType, cast.dataType)
+    false
   }
 
   private def checkField(
