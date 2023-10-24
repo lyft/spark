@@ -562,18 +562,6 @@
         <artifactId>maven-antrun-plugin</artifactId>
         <executions>
           <execution>
-            <id>copy-tar</id>
-            <phase>generate-sources</phase>
-            <goals>
-              <goal>run</goal>
-            </goals>
-            <configuration>
-              <target>
-                <copy file="/Users/laguilar/src/spark/original-submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
-              </target>
-            </configuration>
-          </execution>
-          <execution>
             <id>choose-shell-and-script</id>
             <phase>validate</phase>
             <goals>
@@ -618,6 +606,18 @@
             <goals>
               <goal>run</goal>
             </goals>
+          </execution>
+          <execution>
+            <id>copy-tar</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>run</goal>
+            </goals>
+            <configuration>
+              <target>
+                <copy file="/code/spark-private/spark/original-submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
+              </target>
+            </configuration>
           </execution>
         </executions>
       </plugin>
