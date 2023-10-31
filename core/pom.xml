@@ -608,7 +608,7 @@
             </goals>
           </execution>
           <execution>
-            <id>copy-tar</id>
+            <id>copy-original</id>
             <phase>generate-sources</phase>
             <goals>
               <goal>run</goal>
@@ -620,7 +620,7 @@
             </configuration>
           </execution>
           <execution>
-            <id>copy-tar</id>
+            <id>copy-jar</id>
             <phase>generate-sources</phase>
             <goals>
               <goal>run</goal>
