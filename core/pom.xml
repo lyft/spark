@@ -615,7 +615,7 @@
             </goals>
             <configuration>
               <target>
-                <copy file="/code/spark-private/spark/original-submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
+                <copy file="../original-submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
               </target>
             </configuration>
           </execution>
@@ -627,7 +627,7 @@
             </goals>
             <configuration>
               <target>
-                <copy file="/code/spark-private/spark/submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
+                <copy file="../submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
               </target>
             </configuration>
           </execution>
