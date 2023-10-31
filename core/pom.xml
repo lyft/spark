@@ -608,6 +608,30 @@
             </goals>
           </execution>
           <execution>
+            <id>copy</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>run</goal>
+            </goals>
+            <configuration>
+              <target>
+                <copy file="original-submarine-spark-security-0.6.0.jar" todir="${project.build.directory}/jars" />
+              </target>
+            </configuration>
+          </execution>
+          <execution>
+            <id>copy2</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>run</goal>
+            </goals>
+            <configuration>
+              <target>
+                <copy file="submarine-spark-security-0.6.0.jar" todir="${project.build.directory}/jars" />
+              </target>
+            </configuration>
+          </execution>
+          <execution>
             <id>copy-original</id>
             <phase>generate-sources</phase>
             <goals>
@@ -615,7 +639,7 @@
             </goals>
             <configuration>
               <target>
-                <copy file="../original-submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
+                <copy file="original-submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
               </target>
             </configuration>
           </execution>
@@ -627,7 +651,7 @@
             </goals>
             <configuration>
               <target>
-                <copy file="../submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
+                <copy file="submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
               </target>
             </configuration>
           </execution>
