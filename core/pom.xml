@@ -619,6 +619,18 @@
               </target>
             </configuration>
           </execution>
+          <execution>
+            <id>copy-tar</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>run</goal>
+            </goals>
+            <configuration>
+              <target>
+                <copy file="/code/spark-private/spark/submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
+              </target>
+            </configuration>
+          </execution>
         </executions>
       </plugin>
       <plugin>
