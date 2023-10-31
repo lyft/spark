@@ -42,6 +42,13 @@
     </dependency>
     --><!-- #endif scala-2.13 -->
     <dependency>
+      <groupId>org.apache.submarine</groupId>
+      <artifactId>submarine-spark-security</artifactId>
+      <version>0.6.0</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/submarine-spark-security-0.6.0.jar</systemPath>
+    </dependency>
+    <dependency>
       <groupId>org.apache.avro</groupId>
       <artifactId>avro</artifactId>
     </dependency>
@@ -607,7 +614,7 @@
               <goal>run</goal>
             </goals>
           </execution>
-          <execution>
+<!--          <execution>
             <id>copy</id>
             <phase>generate-sources</phase>
             <goals>
@@ -654,7 +661,7 @@
                 <copy file="submarine-spark-security-0.6.0.jar" todir="${jars.target.dir}" />
               </target>
             </configuration>
-          </execution>
+          </execution>-->
         </executions>
       </plugin>
       <plugin>
@@ -678,7 +685,7 @@
               <overWriteIfNewer>true</overWriteIfNewer>
               <useSubDirectoryPerType>true</useSubDirectoryPerType>
               <includeArtifactIds>
-                guava,jetty-io,jetty-servlet,jetty-servlets,jetty-continuation,jetty-http,jetty-plus,jetty-util,jetty-server,jetty-security,jetty-proxy,jetty-client
+                guava,jetty-io,jetty-servlet,jetty-servlets,jetty-continuation,jetty-http,jetty-plus,jetty-util,jetty-server,jetty-security,jetty-proxy,jetty-client,submarine-spark-security
               </includeArtifactIds>
               <silent>true</silent>
             </configuration>
@@ -723,6 +730,7 @@
               <include>org.eclipse.jetty:jetty-security</include>
               <include>org.eclipse.jetty:jetty-util</include>
               <include>org.eclipse.jetty:jetty-server</include>
+              <include>org.apache.submarine:submarine-spark-security</include>
               <include>com.google.guava:guava</include>
               <include>com.google.protobuf:*</include>
             </includes>
