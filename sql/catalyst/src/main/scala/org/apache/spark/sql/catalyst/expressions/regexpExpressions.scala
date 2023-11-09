@@ -27,8 +27,7 @@ import org.apache.commons.text.StringEscapeUtils
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
-import org.apache.spark.sql.catalyst.analysis.TypeCheckResult.{DataTypeMismatch, TypeCheckSuccess}
-import org.apache.spark.sql.catalyst.expressions.Cast._
+import org.apache.spark.sql.catalyst.analysis.TypeCheckResult.{TypeCheckFailure, TypeCheckSuccess}
 import org.apache.spark.sql.catalyst.expressions.codegen._
 import org.apache.spark.sql.catalyst.expressions.codegen.Block._
 import org.apache.spark.sql.catalyst.trees.BinaryLike
@@ -38,12 +37,14 @@ import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
+
 abstract class StringRegexExpression extends BinaryExpression
-  with ImplicitCastInputTypes with NullIntolerant with Predicate {
+  with ImplicitCastInputTypes with NullIntolerant {
 
   def escape(v: String): String
   def matches(regex: Pattern, str: String): Boolean
 
+  override def dataType: DataType = BooleanType
   override def inputTypes: Seq[DataType] = Seq(StringType, StringType)
 
   // try cache foldable pattern
@@ -57,12 +58,7 @@ abstract class StringRegexExpression extends BinaryExpression
     null
   } else {
     // Let it raise exception if couldn't compile the regex string
-    try {
-      Pattern.compile(escape(str))
-    } catch {
-      case e: PatternSyntaxException =>
-        throw QueryExecutionErrors.invalidPatternError(prettyName, e.getPattern, e)
-    }
+    Pattern.compile(escape(str))
   }
 
   protected def pattern(str: String) = if (cache == null) compile(str) else cache
@@ -254,13 +250,15 @@ case class ILike(
 }
 
 sealed abstract class MultiLikeBase
-  extends UnaryExpression with ImplicitCastInputTypes with NullIntolerant with Predicate {
+  extends UnaryExpression with ImplicitCastInputTypes with NullIntolerant {
 
   protected def patterns: Seq[UTF8String]
 
   protected def isNotSpecified: Boolean
 
   override def inputTypes: Seq[DataType] = StringType :: Nil
+
+  override def dataType: DataType = BooleanType
 
   override def nullable: Boolean = true
 
@@ -532,7 +530,7 @@ case class StringSplit(str: Expression, regex: Expression, limit: Expression)
   override def second: Expression = regex
   override def third: Expression = limit
 
-  def this(exp: Expression, regex: Expression) = this(exp, regex, Literal(-1))
+  def this(exp: Expression, regex: Expression) = this(exp, regex, Literal(-1));
 
   override def nullSafeEval(string: Any, regex: Any, limit: Any): Any = {
     val strings = string.asInstanceOf[UTF8String].split(
@@ -599,28 +597,14 @@ case class RegExpReplace(subject: Expression, regexp: Expression, rep: Expressio
       return defaultCheck
     }
     if (!pos.foldable) {
-      return DataTypeMismatch(
-        errorSubClass = "NON_FOLDABLE_INPUT",
-        messageParameters = Map(
-          "inputName" -> "position",
-          "inputType" -> toSQLType(pos.dataType),
-          "inputExpr" -> toSQLExpr(pos)
-        )
-      )
+      return TypeCheckFailure(s"Position expression must be foldable, but got $pos")
     }
 
     val posEval = pos.eval()
     if (posEval == null || posEval.asInstanceOf[Int] > 0) {
       TypeCheckSuccess
     } else {
-      DataTypeMismatch(
-        errorSubClass = "VALUE_OUT_OF_RANGE",
-        messageParameters = Map(
-          "exprName" -> "position",
-          "valueRange" -> s"(0, ${Int.MaxValue}]",
-          "currentValue" -> toSQLValue(posEval, pos.dataType)
-        )
-      )
+      TypeCheckFailure(s"Position expression must be positive, but got: $posEval")
     }
   }
 
@@ -639,12 +623,7 @@ case class RegExpReplace(subject: Expression, regexp: Expression, rep: Expressio
     if (!p.equals(lastRegex)) {
       // regex value changed
       lastRegex = p.asInstanceOf[UTF8String].clone()
-      try {
-        pattern = Pattern.compile(lastRegex.toString)
-      } catch {
-        case e: PatternSyntaxException =>
-          throw QueryExecutionErrors.invalidPatternError(prettyName, e.getPattern, e)
-      }
+      pattern = Pattern.compile(lastRegex.toString)
     }
     if (!r.equals(lastReplacementInUTF8)) {
       // replacement string changed
@@ -698,11 +677,7 @@ case class RegExpReplace(subject: Expression, regexp: Expression, rep: Expressio
       if (!$regexp.equals($termLastRegex)) {
         // regex value changed
         $termLastRegex = $regexp.clone();
-        try {
-          $termPattern = $classNamePattern.compile($termLastRegex.toString());
-        } catch (java.util.regex.PatternSyntaxException e) {
-          throw QueryExecutionErrors.invalidPatternError("$prettyName", e.getPattern(), e);
-        }
+        $termPattern = $classNamePattern.compile($termLastRegex.toString());
       }
       if (!$rep.equals($termLastReplacementInUTF8)) {
         // replacement string changed
@@ -783,7 +758,8 @@ abstract class RegExpExtractBase
         lastRegex = r
       } catch {
         case e: PatternSyntaxException =>
-          throw QueryExecutionErrors.invalidPatternError(prettyName, e.getPattern, e)
+          throw QueryExecutionErrors.invalidPatternError(prettyName, e.getPattern)
+
       }
     }
     pattern.matcher(s.toString)
@@ -806,7 +782,7 @@ abstract class RegExpExtractBase
       |    $termPattern = $classNamePattern.compile(r.toString());
       |    $termLastRegex = r;
       |  } catch (java.util.regex.PatternSyntaxException e) {
-      |    throw QueryExecutionErrors.invalidPatternError("$prettyName", e.getPattern(), e);
+      |    throw QueryExecutionErrors.invalidPatternError("$prettyName", e.getPattern());
       |  }
       |}
       |java.util.regex.Matcher $matcher = $termPattern.matcher($subject.toString());
@@ -998,157 +974,5 @@ case class RegExpExtractAll(subject: Expression, regexp: Expression, idx: Expres
 
   override protected def withNewChildrenInternal(
       newFirst: Expression, newSecond: Expression, newThird: Expression): RegExpExtractAll =
-    copy(subject = newFirst, regexp = newSecond, idx = newThird)
-}
-
-// scalastyle:off line.size.limit
-@ExpressionDescription(
-  usage = """
-    _FUNC_(str, regexp) - Returns a count of the number of times that the regular expression pattern `regexp` is matched in the string `str`.
-  """,
-  arguments = """
-    Arguments:
-      * str - a string expression.
-      * regexp - a string representing a regular expression. The regex string should be a
-          Java regular expression.
-  """,
-  examples = """
-    Examples:
-      > SELECT _FUNC_('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');
-       2
-      > SELECT _FUNC_('abcdefghijklmnopqrstuvwxyz', '[a-z]{3}');
-       8
-  """,
-  since = "3.4.0",
-  group = "string_funcs")
-// scalastyle:on line.size.limit
-case class RegExpCount(left: Expression, right: Expression)
-  extends RuntimeReplaceable with ImplicitCastInputTypes {
-
-  override lazy val replacement: Expression =
-    Size(RegExpExtractAll(left, right, Literal(0)), legacySizeOfNull = false)
-
-  override def prettyName: String = "regexp_count"
-
-  override def children: Seq[Expression] = Seq(left, right)
-
-  override def inputTypes: Seq[AbstractDataType] = Seq(StringType, StringType)
-
-  override protected def withNewChildrenInternal(
-      newChildren: IndexedSeq[Expression]): RegExpCount =
-    copy(left = newChildren(0), right = newChildren(1))
-}
-
-// scalastyle:off line.size.limit
-@ExpressionDescription(
-  usage = """
-    _FUNC_(str, regexp) - Returns the substring that matches the regular expression `regexp` within the string `str`. If the regular expression is not found, the result is null.
-  """,
-  arguments = """
-    Arguments:
-      * str - a string expression.
-      * regexp - a string representing a regular expression. The regex string should be a Java regular expression.
-  """,
-  examples = """
-    Examples:
-      > SELECT _FUNC_('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');
-       Steven
-      > SELECT _FUNC_('Steven Jones and Stephen Smith are the best players', 'Jeck');
-       NULL
-  """,
-  since = "3.4.0",
-  group = "string_funcs")
-// scalastyle:on line.size.limit
-case class RegExpSubStr(left: Expression, right: Expression)
-  extends RuntimeReplaceable with ImplicitCastInputTypes {
-
-  override lazy val replacement: Expression =
-    new NullIf(
-      RegExpExtract(subject = left, regexp = right, idx = Literal(0)),
-      Literal(""))
-
-  override def prettyName: String = "regexp_substr"
-
-  override def children: Seq[Expression] = Seq(left, right)
-
-  override def inputTypes: Seq[AbstractDataType] = Seq(StringType, StringType)
-
-  override protected def withNewChildrenInternal(
-      newChildren: IndexedSeq[Expression]): RegExpSubStr =
-    copy(left = newChildren(0), right = newChildren(1))
-}
-
-// scalastyle:off line.size.limit
-@ExpressionDescription(
-  usage = """
-    _FUNC_(str, regexp) - Searches a string for a regular expression and returns an integer that indicates the beginning position of the matched substring. Positions are 1-based, not 0-based. If no match is found, returns 0.
-  """,
-  arguments = """
-    Arguments:
-      * str - a string expression.
-      * regexp - a string representing a regular expression. The regex string should be a
-          Java regular expression.<br><br>
-          Since Spark 2.0, string literals (including regex patterns) are unescaped in our SQL
-          parser. For example, to match "\abc", a regular expression for `regexp` can be
-          "^\\abc$".<br><br>
-          There is a SQL config 'spark.sql.parser.escapedStringLiterals' that can be used to
-          fallback to the Spark 1.6 behavior regarding string literal parsing. For example,
-          if the config is enabled, the `regexp` that can match "\abc" is "^\abc$".
-  """,
-  examples = """
-    Examples:
-      > SELECT _FUNC_('user@spark.apache.org', '@[^.]*');
-       5
-  """,
-  since = "3.4.0",
-  group = "string_funcs")
-// scalastyle:on line.size.limit
-case class RegExpInStr(subject: Expression, regexp: Expression, idx: Expression)
-  extends RegExpExtractBase {
-  def this(s: Expression, r: Expression) = this(s, r, Literal(0))
-
-  override def nullSafeEval(s: Any, r: Any, i: Any): Any = {
-    try {
-      val m = getLastMatcher(s, r)
-      if (m.find) {
-        m.toMatchResult.start() + 1
-      } else {
-        0
-      }
-    } catch {
-      case _: IllegalStateException => 0
-    }
-  }
-
-  override def dataType: DataType = IntegerType
-  override def prettyName: String = "regexp_instr"
-
-  override protected def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
-    val matcher = ctx.freshName("matcher")
-    val setEvNotNull = if (nullable) {
-      s"${ev.isNull} = false;"
-    } else {
-      ""
-    }
-
-    nullSafeCodeGen(ctx, ev, (subject, regexp, _) => {
-      s"""
-         |try {
-         |  $setEvNotNull
-         |  ${initLastMatcherCode(ctx, subject, regexp, matcher)}
-         |  if ($matcher.find()) {
-         |    ${ev.value} = $matcher.toMatchResult().start() + 1;
-         |  } else {
-         |    ${ev.value} = 0;
-         |  }
-         |} catch (IllegalStateException e) {
-         |  ${ev.value} = 0;
-         |}
-         |""".stripMargin
-    })
-  }
-
-  override protected def withNewChildrenInternal(
-      newFirst: Expression, newSecond: Expression, newThird: Expression): RegExpInStr =
     copy(subject = newFirst, regexp = newSecond, idx = newThird)
 }

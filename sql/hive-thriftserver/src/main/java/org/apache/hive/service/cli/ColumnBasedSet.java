@@ -47,10 +47,15 @@ public class ColumnBasedSet implements RowSet {
   public static final Logger LOG = LoggerFactory.getLogger(ColumnBasedSet.class);
 
   public ColumnBasedSet(TableSchema schema) {
-    descriptors = schema.toTypeDescriptors();
-    columns = new ArrayList<ColumnBuffer>();
-    for (ColumnDescriptor colDesc : schema.getColumnDescriptors()) {
-      columns.add(new ColumnBuffer(colDesc.getType()));
+    if (schema == null) {
+      descriptors = new TypeDescriptor[0];
+      columns = new ArrayList<ColumnBuffer>();
+    } else {
+      descriptors = schema.toTypeDescriptors();
+      columns = new ArrayList<ColumnBuffer>();
+      for (ColumnDescriptor colDesc : schema.getColumnDescriptors()) {
+        columns.add(new ColumnBuffer(colDesc.getType()));
+      }
     }
   }
 

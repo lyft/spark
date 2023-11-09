@@ -16,6 +16,36 @@
  */
 package org.apache.spark.deploy.k8s.integrationtest
 
+<<<<<<<< HEAD:core/src/main/scala/org/apache/spark/status/protobuf/Utils.scala
+package org.apache.spark.status.protobuf
+
+import java.util.{Map => JMap}
+
+private[protobuf] object Utils {
+  def getOptional[T](condition: Boolean, result: () => T): Option[T] = if (condition) {
+    Some(result())
+  } else {
+    None
+  }
+
+  def setStringField(input: String, f: String => Any): Unit = {
+    if (input != null) {
+      f(input)
+    }
+  }
+
+  def getStringField(condition: Boolean, result: () => String): String = if (condition) {
+    result()
+  } else {
+    null
+  }
+
+  def setJMapField[K, V](input: JMap[K, V], putAllFunc: JMap[K, V] => Any): Unit = {
+    if (input != null && !input.isEmpty) {
+      putAllFunc(input)
+    }
+  }
+========
 @YuniKornTag
 class YuniKornSuite extends KubernetesSuite {
 
@@ -29,4 +59,5 @@ class YuniKornSuite extends KubernetesSuite {
       .set("spark.kubernetes.driver.annotation.yunikorn.apache.org/app-id", "{{APP_ID}}")
       .set("spark.kubernetes.executor.annotation.yunikorn.apache.org/app-id", "{{APP_ID}}")
   }
+>>>>>>>> c93bba8b9d4823c0d891561e041eaec91be0c11b:resource-managers/kubernetes/integration-tests/src/test/scala/org/apache/spark/deploy/k8s/integrationtest/YuniKornSuite.scala
 }

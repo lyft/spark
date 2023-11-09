@@ -280,4 +280,35 @@ class AvroFunctionsSuite extends QueryTest with SharedSparkSession {
       assert(msg.contains("Invalid default for field id: null not a \"long\""))
     }
   }
+
+  test("SPARK-39775: Disable validate default values when parsing Avro schemas") {
+    val avroTypeStruct = s"""
+      |{
+      |  "type": "record",
+      |  "name": "struct",
+      |  "fields": [
+      |    {"name": "id", "type": "long", "default": null}
+      |  ]
+      |}
+    """.stripMargin
+    val avroSchema = AvroOptions(Map("avroSchema" -> avroTypeStruct)).schema.get
+    val sparkSchema = SchemaConverters.toSqlType(avroSchema).dataType.asInstanceOf[StructType]
+
+    val df = spark.range(5).select($"id")
+    val structDf = df.select(struct($"id").as("struct"))
+    val avroStructDF = structDf.select(functions.to_avro('struct, avroTypeStruct).as("avro"))
+    checkAnswer(avroStructDF.select(functions.from_avro('avro, avroTypeStruct)), structDf)
+
+    withTempPath { dir =>
+      df.write.format("avro").save(dir.getCanonicalPath)
+      checkAnswer(spark.read.schema(sparkSchema).format("avro").load(dir.getCanonicalPath), df)
+
+      val msg = intercept[SparkException] {
+        spark.read.option("avroSchema", avroTypeStruct).format("avro")
+          .load(dir.getCanonicalPath)
+          .collect()
+      }.getCause.getMessage
+      assert(msg.contains("Invalid default for field id: null not a \"long\""))
+    }
+  }
 }

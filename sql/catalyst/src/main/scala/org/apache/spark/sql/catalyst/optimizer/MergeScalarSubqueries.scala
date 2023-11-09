@@ -17,7 +17,6 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
-import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.sql.catalyst.expressions._
@@ -101,7 +100,7 @@ import org.apache.spark.sql.types.DataType
  * :  +- ReusedSubquery Subquery scalar-subquery#242, [id=#125]
  * +- *(1) Scan OneRowRelation[]
  */
-object MergeScalarSubqueries extends Rule[LogicalPlan] {
+object MergeScalarSubqueries extends Rule[LogicalPlan] with PredicateHelper {
   def apply(plan: LogicalPlan): LogicalPlan = {
     plan match {
       // Subquery reuse needs to be enabled for this optimization.
@@ -127,14 +126,8 @@ object MergeScalarSubqueries extends Rule[LogicalPlan] {
    *               merged as there can be subqueries that are different ([[checkIdenticalPlans]] is
    *               false) due to an extra [[Project]] node in one of them. In that case
    *               `attributes.size` remains 1 after merging, but the merged flag becomes true.
-   * @param references A set of subquery indexes in the cache to track all (including transitive)
-   *                   nested subqueries.
    */
-  case class Header(
-      attributes: Seq[Attribute],
-      plan: LogicalPlan,
-      merged: Boolean,
-      references: Set[Int])
+  case class Header(attributes: Seq[Attribute], plan: LogicalPlan, merged: Boolean)
 
   private def extractCommonScalarSubqueries(plan: LogicalPlan) = {
     val cache = ArrayBuffer.empty[Header]
@@ -162,8 +155,6 @@ object MergeScalarSubqueries extends Rule[LogicalPlan] {
   private def insertReferences(plan: LogicalPlan, cache: ArrayBuffer[Header]): LogicalPlan = {
     plan.transformUpWithSubqueries {
       case n => n.transformExpressionsUpWithPruning(_.containsAnyPattern(SCALAR_SUBQUERY)) {
-        // The subquery could contain a hint that is not propagated once we cache it, but as a
-        // non-correlated scalar subquery won't be turned into a Join the loss of hints is fine.
         case s: ScalarSubquery if !s.isCorrelated && s.deterministic =>
           val (subqueryIndex, headerIndex) = cacheSubquery(s.plan, cache)
           ScalarSubqueryReference(subqueryIndex, headerIndex, s.dataType, s.exprId)
@@ -175,39 +166,26 @@ object MergeScalarSubqueries extends Rule[LogicalPlan] {
   // "Header".
   private def cacheSubquery(plan: LogicalPlan, cache: ArrayBuffer[Header]): (Int, Int) = {
     val output = plan.output.head
-    val references = mutable.HashSet.empty[Int]
-    plan.transformAllExpressionsWithPruning(_.containsAnyPattern(SCALAR_SUBQUERY_REFERENCE)) {
-      case ssr: ScalarSubqueryReference =>
-        references += ssr.subqueryIndex
-        references ++= cache(ssr.subqueryIndex).references
-        ssr
-    }
-
-    cache.zipWithIndex.collectFirst(Function.unlift {
-      case (header, subqueryIndex) if !references.contains(subqueryIndex) =>
-        checkIdenticalPlans(plan, header.plan).map { outputMap =>
+    cache.zipWithIndex.collectFirst(Function.unlift { case (header, subqueryIndex) =>
+      checkIdenticalPlans(plan, header.plan).map { outputMap =>
+        val mappedOutput = mapAttributes(output, outputMap)
+        val headerIndex = header.attributes.indexWhere(_.exprId == mappedOutput.exprId)
+        subqueryIndex -> headerIndex
+      }.orElse(tryMergePlans(plan, header.plan).map {
+        case (mergedPlan, outputMap) =>
           val mappedOutput = mapAttributes(output, outputMap)
-          val headerIndex = header.attributes.indexWhere(_.exprId == mappedOutput.exprId)
-          subqueryIndex -> headerIndex
-        }.orElse{
-          tryMergePlans(plan, header.plan).map {
-            case (mergedPlan, outputMap) =>
-              val mappedOutput = mapAttributes(output, outputMap)
-              var headerIndex = header.attributes.indexWhere(_.exprId == mappedOutput.exprId)
-              val newHeaderAttributes = if (headerIndex == -1) {
-                headerIndex = header.attributes.size
-                header.attributes :+ mappedOutput
-              } else {
-                header.attributes
-              }
-              cache(subqueryIndex) =
-                Header(newHeaderAttributes, mergedPlan, true, header.references ++ references)
-              subqueryIndex -> headerIndex
+          var headerIndex = header.attributes.indexWhere(_.exprId == mappedOutput.exprId)
+          val newHeaderAttributes = if (headerIndex == -1) {
+            headerIndex = header.attributes.size
+            header.attributes :+ mappedOutput
+          } else {
+            header.attributes
           }
-        }
-      case _ => None
+          cache(subqueryIndex) = Header(newHeaderAttributes, mergedPlan, true)
+          subqueryIndex -> headerIndex
+      })
     }).getOrElse {
-      cache += Header(Seq(output), plan, false, references.toSet)
+      cache += Header(Seq(output), plan, false)
       cache.length - 1 -> 0
     }
   }
@@ -348,19 +326,22 @@ object MergeScalarSubqueries extends Rule[LogicalPlan] {
   // Only allow aggregates of the same implementation because merging different implementations
   // could cause performance regression.
   private def supportedAggregateMerge(newPlan: Aggregate, cachedPlan: Aggregate) = {
-    val aggregateExpressionsSeq = Seq(newPlan, cachedPlan).map { plan =>
-      plan.aggregateExpressions.flatMap(_.collect {
-        case a: AggregateExpression => a
-      })
-    }
-    val Seq(newPlanSupportsHashAggregate, cachedPlanSupportsHashAggregate) =
-      aggregateExpressionsSeq.map(aggregateExpressions => Aggregate.supportsHashAggregate(
-        aggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes)))
+    val newPlanAggregateExpressions = newPlan.aggregateExpressions.flatMap(_.collect {
+      case a: AggregateExpression => a
+    })
+    val cachedPlanAggregateExpressions = cachedPlan.aggregateExpressions.flatMap(_.collect {
+      case a: AggregateExpression => a
+    })
+    val newPlanSupportsHashAggregate = Aggregate.supportsHashAggregate(
+      newPlanAggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes))
+    val cachedPlanSupportsHashAggregate = Aggregate.supportsHashAggregate(
+      cachedPlanAggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes))
     newPlanSupportsHashAggregate && cachedPlanSupportsHashAggregate ||
       newPlanSupportsHashAggregate == cachedPlanSupportsHashAggregate && {
-        val Seq(newPlanSupportsObjectHashAggregate, cachedPlanSupportsObjectHashAggregate) =
-          aggregateExpressionsSeq.map(aggregateExpressions =>
-            Aggregate.supportsObjectHashAggregate(aggregateExpressions))
+        val newPlanSupportsObjectHashAggregate =
+          Aggregate.supportsObjectHashAggregate(newPlanAggregateExpressions)
+        val cachedPlanSupportsObjectHashAggregate =
+          Aggregate.supportsObjectHashAggregate(cachedPlanAggregateExpressions)
         newPlanSupportsObjectHashAggregate && cachedPlanSupportsObjectHashAggregate ||
           newPlanSupportsObjectHashAggregate == cachedPlanSupportsObjectHashAggregate
       }
@@ -393,11 +374,7 @@ object MergeScalarSubqueries extends Rule[LogicalPlan] {
 }
 
 /**
- * Temporal reference to a cached subquery.
- *
- * @param subqueryIndex A subquery index in the cache.
- * @param headerIndex An index in the output of merged subquery.
- * @param dataType The dataType of origin scalar subquery.
+ * Temporal reference to a subquery.
  */
 case class ScalarSubqueryReference(
     subqueryIndex: Int,

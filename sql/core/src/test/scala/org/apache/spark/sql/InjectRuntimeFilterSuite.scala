@@ -19,7 +19,7 @@ package org.apache.spark.sql
 
 import org.apache.spark.sql.catalyst.expressions.{Alias, BloomFilterMightContain, Literal}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, BloomFilterAggregate}
-import org.apache.spark.sql.catalyst.optimizer.{ColumnPruning, MergeScalarSubqueries}
+import org.apache.spark.sql.catalyst.optimizer.MergeScalarSubqueries
 import org.apache.spark.sql.catalyst.plans.LeftSemi
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, Join, LogicalPlan}
 import org.apache.spark.sql.execution.{ReusedSubqueryExec, SubqueryExec}
@@ -257,11 +257,6 @@ class InjectRuntimeFilterSuite extends QueryTest with SQLTestUtils with SharedSp
         val normalizedDisabled = normalizePlan(normalizeExprIds(planDisabled))
         ensureLeftSemiJoinExists(planEnabled)
         assert(normalizedEnabled != normalizedDisabled)
-        val agg = planEnabled.collect {
-          case Join(_, agg: Aggregate, LeftSemi, _, _) => agg
-        }
-        assert(agg.size == 1)
-        assert(agg.head.fastEquals(ColumnPruning(agg.head)))
       } else {
         comparePlans(planDisabled, planEnabled)
       }
@@ -552,32 +547,6 @@ class InjectRuntimeFilterSuite extends QueryTest with SQLTestUtils with SharedSp
           |FROM   bf1 LEFT SEMI
           |JOIN   (SELECT * FROM bf2 WHERE bf2.a2 = 62) tmp
           |ON     bf1.c1 = tmp.c2
-        """.stripMargin)
-    }
-  }
-
-  test("Runtime Filter supports pruning side has Aggregate") {
-    withSQLConf(SQLConf.RUNTIME_BLOOM_FILTER_APPLICATION_SIDE_SCAN_SIZE_THRESHOLD.key -> "3000") {
-      assertRewroteWithBloomFilter(
-        """
-          |SELECT *
-          |FROM   (SELECT c1 AS aliased_c1, d1 FROM bf1 GROUP BY c1, d1) bf1
-          |       JOIN bf2 ON bf1.aliased_c1 = bf2.c2
-          |WHERE  bf2.a2 = 62
-        """.stripMargin)
-    }
-  }
-
-  test("Runtime Filter supports pruning side has Window") {
-    withSQLConf(SQLConf.RUNTIME_BLOOM_FILTER_APPLICATION_SIDE_SCAN_SIZE_THRESHOLD.key -> "3000") {
-      assertRewroteWithBloomFilter(
-        """
-          |SELECT *
-          |FROM   (SELECT *,
-          |               Row_number() OVER (PARTITION BY c1 ORDER BY f1) rn
-          |        FROM   bf1) bf1
-          |       JOIN bf2 ON bf1.c1 = bf2.c2
-          |WHERE  bf2.a2 = 62
         """.stripMargin)
     }
   }

@@ -36,7 +36,6 @@ import org.apache.spark.sql.execution.command.DDLUtils
 import org.apache.spark.sql.execution.datasources.DataSource
 import org.apache.spark.sql.execution.datasources.csv._
 import org.apache.spark.sql.execution.datasources.jdbc._
-import org.apache.spark.sql.execution.datasources.json.JsonUtils.checkJsonSchema
 import org.apache.spark.sql.execution.datasources.json.TextInputJsonDataSource
 import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Utils
 import org.apache.spark.sql.internal.SQLConf
@@ -358,7 +357,7 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
    */
   @scala.annotation.varargs
   def json(paths: String*): DataFrame = {
-    userSpecifiedSchema.foreach(checkJsonSchema)
+    userSpecifiedSchema.foreach(ExprUtils.checkJsonSchema(_).foreach(throw _))
     format("json").load(paths : _*)
   }
 
@@ -407,7 +406,7 @@ class DataFrameReader private[sql](sparkSession: SparkSession) extends Logging {
       sparkSession.sessionState.conf.sessionLocalTimeZone,
       sparkSession.sessionState.conf.columnNameOfCorruptRecord)
 
-    userSpecifiedSchema.foreach(checkJsonSchema)
+    userSpecifiedSchema.foreach(ExprUtils.checkJsonSchema(_).foreach(throw _))
     val schema = userSpecifiedSchema.map {
       case s if !SQLConf.get.getConf(
         SQLConf.LEGACY_RESPECT_NULLABILITY_IN_TEXT_DATASET_CONVERSION) => s.asNullable

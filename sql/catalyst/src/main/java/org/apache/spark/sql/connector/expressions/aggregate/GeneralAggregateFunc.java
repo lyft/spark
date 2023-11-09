@@ -18,10 +18,10 @@
 package org.apache.spark.sql.connector.expressions.aggregate;
 
 import java.util.Arrays;
+import java.util.stream.Collectors;
 
 import org.apache.spark.annotation.Evolving;
 import org.apache.spark.sql.connector.expressions.Expression;
-import org.apache.spark.sql.internal.connector.ExpressionWithToString;
 
 /**
  * The general implementation of {@link AggregateFunc}, which contains the upper-cased function
@@ -37,19 +37,18 @@ import org.apache.spark.sql.internal.connector.ExpressionWithToString;
  *  <li><pre>COVAR_POP(input1, input2)</pre> Since 3.3.0</li>
  *  <li><pre>COVAR_SAMP(input1, input2)</pre> Since 3.3.0</li>
  *  <li><pre>CORR(input1, input2)</pre> Since 3.3.0</li>
- *  <li><pre>REGR_INTERCEPT(input1, input2)</pre> Since 3.4.0</li>
- *  <li><pre>REGR_R2(input1, input2)</pre> Since 3.4.0</li>
- *  <li><pre>REGR_SLOPE(input1, input2)</pre> Since 3.4.0</li>
- *  <li><pre>REGR_SXY(input1, input2)</pre> Since 3.4.0</li>
  * </ol>
  *
  * @since 3.3.0
  */
 @Evolving
-public final class GeneralAggregateFunc extends ExpressionWithToString implements AggregateFunc {
+public final class GeneralAggregateFunc implements AggregateFunc {
   private final String name;
   private final boolean isDistinct;
   private final Expression[] children;
+
+  public String name() { return name; }
+  public boolean isDistinct() { return isDistinct; }
 
   public GeneralAggregateFunc(String name, boolean isDistinct, Expression[] children) {
     this.name = name;
@@ -57,29 +56,18 @@ public final class GeneralAggregateFunc extends ExpressionWithToString implement
     this.children = children;
   }
 
-  public String name() { return name; }
-  public boolean isDistinct() { return isDistinct; }
-
   @Override
   public Expression[] children() { return children; }
 
   @Override
-  public boolean equals(Object o) {
-    if (this == o) return true;
-    if (o == null || getClass() != o.getClass()) return false;
-
-    GeneralAggregateFunc that = (GeneralAggregateFunc) o;
-
-    if (isDistinct != that.isDistinct) return false;
-    if (!name.equals(that.name)) return false;
-    return Arrays.equals(children, that.children);
-  }
-
-  @Override
-  public int hashCode() {
-    int result = name.hashCode();
-    result = 31 * result + (isDistinct ? 1 : 0);
-    result = 31 * result + Arrays.hashCode(children);
-    return result;
+  public String toString() {
+    String inputsString = Arrays.stream(children)
+      .map(Expression::describe)
+      .collect(Collectors.joining(", "));
+    if (isDistinct) {
+      return name + "(DISTINCT " + inputsString + ")";
+    } else {
+      return name + "(" + inputsString + ")";
+    }
   }
 }

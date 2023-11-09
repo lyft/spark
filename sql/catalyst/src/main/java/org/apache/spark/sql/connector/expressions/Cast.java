@@ -15,19 +15,42 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:sql/catalyst/src/main/java/org/apache/spark/sql/connector/write/SupportsDelta.java
+package org.apache.spark.sql.connector.write;
+
+import org.apache.spark.annotation.Experimental;
+import org.apache.spark.sql.connector.expressions.NamedReference;
+
+/**
+ * A mix-in interface for {@link RowLevelOperation}. Data sources can implement this interface
+ * to indicate they support handling deltas of rows.
+========
 package org.apache.spark.sql.connector.expressions;
 
+import java.io.Serializable;
+
 import org.apache.spark.annotation.Evolving;
-import org.apache.spark.sql.internal.connector.ExpressionWithToString;
 import org.apache.spark.sql.types.DataType;
 
 /**
  * Represents a cast expression in the public logical expression API.
+>>>>>>>> c93bba8b9d4823c0d891561e041eaec91be0c11b:sql/catalyst/src/main/java/org/apache/spark/sql/connector/expressions/Cast.java
  *
- * @since 3.3.0
+ * @since 3.4.0
  */
+<<<<<<<< HEAD:sql/catalyst/src/main/java/org/apache/spark/sql/connector/write/SupportsDelta.java
+@Experimental
+public interface SupportsDelta extends RowLevelOperation {
+  @Override
+  DeltaWriteBuilder newWriteBuilder(LogicalWriteInfo info);
+
+  /**
+   * Returns the row ID column references that should be used for row equality.
+   */
+  NamedReference[] rowId();
+========
 @Evolving
-public class Cast extends ExpressionWithToString {
+public class Cast implements Expression, Serializable {
   private Expression expression;
   private DataType dataType;
 
@@ -41,4 +64,5 @@ public class Cast extends ExpressionWithToString {
 
   @Override
   public Expression[] children() { return new Expression[]{ expression() }; }
+>>>>>>>> c93bba8b9d4823c0d891561e041eaec91be0c11b:sql/catalyst/src/main/java/org/apache/spark/sql/connector/expressions/Cast.java
 }

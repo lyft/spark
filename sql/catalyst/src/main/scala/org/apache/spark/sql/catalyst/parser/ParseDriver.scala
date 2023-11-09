@@ -21,14 +21,14 @@ import org.antlr.v4.runtime.atn.PredictionMode
 import org.antlr.v4.runtime.misc.{Interval, ParseCancellationException}
 import org.antlr.v4.runtime.tree.TerminalNodeImpl
 
-import org.apache.spark.{QueryContext, SparkThrowableHelper}
+import org.apache.spark.SparkThrowableHelper
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.{FunctionIdentifier, SQLConfHelper, TableIdentifier}
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.parser.ParserUtils.withOrigin
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
-import org.apache.spark.sql.catalyst.trees.{CurrentOrigin, Origin}
+import org.apache.spark.sql.catalyst.trees.Origin
 import org.apache.spark.sql.errors.QueryParsingErrors
 import org.apache.spark.sql.types.{DataType, StructType}
 
@@ -118,7 +118,6 @@ abstract class AbstractSqlParser extends ParserInterface with SQLConfHelper with
     parser.legacy_setops_precedence_enabled = conf.setOpsPrecedenceEnforced
     parser.legacy_exponent_literal_as_decimal_enabled = conf.exponentLiteralAsDecimalEnabled
     parser.SQL_standard_keyword_behavior = conf.enforceReservedKeywords
-    parser.double_quoted_identifiers = conf.doubleQuotedIdentifiers
 
     try {
       try {
@@ -238,8 +237,7 @@ class ParseException(
     val start: Origin,
     val stop: Origin,
     errorClass: Option[String] = None,
-    messageParameters: Map[String, String] = Map.empty,
-    queryContext: Array[QueryContext] = ParseException.getQueryContext())
+    messageParameters: Array[String] = Array.empty)
   extends AnalysisException(
     message,
     start.line,
@@ -249,7 +247,14 @@ class ParseException(
     errorClass,
     messageParameters) {
 
-  def this(errorClass: String, messageParameters: Map[String, String], ctx: ParserRuleContext) =
+  def this(message: String, ctx: ParserRuleContext) = {
+    this(Option(ParserUtils.command(ctx)),
+      message,
+      ParserUtils.position(ctx.getStart),
+      ParserUtils.position(ctx.getStop))
+  }
+
+  def this(errorClass: String, messageParameters: Array[String], ctx: ParserRuleContext) =
     this(Option(ParserUtils.command(ctx)),
       SparkThrowableHelper.getMessage(errorClass, messageParameters),
       ParserUtils.position(ctx.getStart),
@@ -257,15 +262,13 @@ class ParseException(
       Some(errorClass),
       messageParameters)
 
-  def this(errorClass: String, ctx: ParserRuleContext) = this(errorClass, Map.empty, ctx)
-
   /** Compose the message through SparkThrowableHelper given errorClass and messageParameters. */
   def this(
       command: Option[String],
       start: Origin,
       stop: Origin,
       errorClass: String,
-      messageParameters: Map[String, String]) =
+      messageParameters: Array[String]) =
     this(
       command,
       SparkThrowableHelper.getMessage(errorClass, messageParameters),
@@ -296,23 +299,12 @@ class ParseException(
   }
 
   def withCommand(cmd: String): ParseException = {
-    val (cls, params) =
-      if (errorClass == Some("PARSE_SYNTAX_ERROR") && cmd.trim().isEmpty) {
-        // PARSE_EMPTY_STATEMENT error class overrides the PARSE_SYNTAX_ERROR when cmd is empty
-        (Some("PARSE_EMPTY_STATEMENT"), Map.empty[String, String])
-      } else {
-        (errorClass, messageParameters)
-      }
-    new ParseException(Option(cmd), message, start, stop, cls, params, queryContext)
-  }
-
-  override def getQueryContext: Array[QueryContext] = queryContext
-}
-
-object ParseException {
-  def getQueryContext(): Array[QueryContext] = {
-    val context = CurrentOrigin.get.context
-    if (context.isValid) Array(context) else Array.empty
+    // PARSE_EMPTY_STATEMENT error class overrides the PARSE_SYNTAX_ERROR when cmd is empty
+    if (cmd.trim().isEmpty && errorClass.isDefined && errorClass.get == "PARSE_SYNTAX_ERROR") {
+      new ParseException(Option(cmd), start, stop, "PARSE_EMPTY_STATEMENT", Array[String]())
+    } else {
+      new ParseException(Option(cmd), message, start, stop, errorClass, messageParameters)
+    }
   }
 }
 
@@ -325,28 +317,11 @@ case object PostProcessor extends SqlBaseParserBaseListener {
   override def exitErrorIdent(ctx: SqlBaseParser.ErrorIdentContext): Unit = {
     val ident = ctx.getParent.getText
 
-    throw QueryParsingErrors.invalidIdentifierError(ident, ctx)
+    throw QueryParsingErrors.unquotedIdentifierError(ident, ctx)
   }
 
   /** Remove the back ticks from an Identifier. */
   override def exitQuotedIdentifier(ctx: SqlBaseParser.QuotedIdentifierContext): Unit = {
-    if (ctx.BACKQUOTED_IDENTIFIER() != null) {
-      replaceTokenByIdentifier(ctx, 1) { token =>
-        // Remove the double back ticks in the string.
-        token.setText(token.getText.replace("``", "`"))
-        token
-      }
-    } else if (ctx.DOUBLEQUOTED_STRING() != null) {
-      replaceTokenByIdentifier(ctx, 1) { token =>
-        // Remove the double quotes in the string.
-        token.setText(token.getText.replace("\"\"", "\""))
-        token
-      }
-    }
-  }
-
-  /** Remove the back ticks from an Identifier. */
-  override def exitBackQuotedIdentifier(ctx: SqlBaseParser.BackQuotedIdentifierContext): Unit = {
     replaceTokenByIdentifier(ctx, 1) { token =>
       // Remove the double back ticks in the string.
       token.setText(token.getText.replace("``", "`"))
@@ -429,10 +404,7 @@ case class UnclosedCommentProcessor(
       val failedToken = tokenStream.get(tokenStream.size() - 2)
       assert(failedToken.getType() == SqlBaseParser.BRACKETED_COMMENT)
       val position = Origin(Option(failedToken.getLine), Option(failedToken.getCharPositionInLine))
-      throw QueryParsingErrors.unclosedBracketedCommentError(
-        command = command,
-        start = Origin(Option(failedToken.getStartIndex)),
-        stop = Origin(Option(failedToken.getStopIndex)))
+      throw QueryParsingErrors.unclosedBracketedCommentError(command, position)
     }
   }
 

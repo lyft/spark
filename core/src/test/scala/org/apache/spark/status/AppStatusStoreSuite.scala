@@ -22,7 +22,7 @@ import scala.util.Random
 import org.apache.spark.{SparkConf, SparkFunSuite}
 import org.apache.spark.executor.TaskMetrics
 import org.apache.spark.internal.config.History.{HYBRID_STORE_DISK_BACKEND, HybridStoreDiskBackend}
-import org.apache.spark.internal.config.Status.{LIVE_ENTITY_UPDATE_PERIOD, LIVE_UI_LOCAL_STORE_DIR}
+import org.apache.spark.internal.config.Status.LIVE_ENTITY_UPDATE_PERIOD
 import org.apache.spark.resource.ResourceProfile
 import org.apache.spark.scheduler.{SparkListenerStageSubmitted, SparkListenerTaskStart, StageInfo, TaskInfo, TaskLocality}
 import org.apache.spark.status.api.v1.SpeculationStageSummary
@@ -88,25 +88,17 @@ class AppStatusStoreSuite extends SparkFunSuite {
       live: Boolean): AppStatusStore = {
     val conf = new SparkConf()
     if (live) {
-      if (disk) {
-        val testDir = Utils.createTempDir()
-        conf.set(LIVE_UI_LOCAL_STORE_DIR, testDir.getCanonicalPath)
-      }
-      val liveStore = AppStatusStore.createLiveStore(conf)
-      if (disk) {
-        val rocksDBCreated = liveStore.store match {
-          case e: ElementTrackingStore => !e.usingInMemoryStore
-          case _ => false
-        }
-        assert(rocksDBCreated)
-      }
-      return liveStore
+      return AppStatusStore.createLiveStore(conf)
+    }
+    // LevelDB doesn't support Apple Silicon yet
+    if (Utils.isMacOnAppleSilicon && disk) {
+      return null
     }
 
     val store: KVStore = if (disk) {
       conf.set(HYBRID_STORE_DISK_BACKEND, diskStoreType.toString)
       val testDir = Utils.createTempDir()
-      val diskStore = KVUtils.open(testDir, getClass.getName, conf, live = false)
+      val diskStore = KVUtils.open(testDir, getClass.getName, conf)
       new ElementTrackingStore(diskStore, conf)
     } else {
       new ElementTrackingStore(new InMemoryStore, conf)
@@ -114,23 +106,12 @@ class AppStatusStoreSuite extends SparkFunSuite {
     new AppStatusStore(store)
   }
 
-  private val cases = {
-    val baseCases = Seq(
-      "disk rocksdb" -> createAppStore(disk = true, HybridStoreDiskBackend.ROCKSDB, live = false),
-      "in memory" -> createAppStore(disk = false, live = false),
-      "in memory live" -> createAppStore(disk = false, live = true),
-      "rocksdb live" -> createAppStore(disk = true, HybridStoreDiskBackend.ROCKSDB, live = true)
-    )
-    if (Utils.isMacOnAppleSilicon) {
-      baseCases
-    } else {
-      Seq(
-        "disk leveldb" -> createAppStore(disk = true, HybridStoreDiskBackend.LEVELDB, live = false)
-      ) ++ baseCases
-    }
-  }
-
-  cases.foreach { case (hint, appStore) =>
+  Seq(
+    "disk leveldb" -> createAppStore(disk = true, HybridStoreDiskBackend.LEVELDB, live = false),
+    "disk rocksdb" -> createAppStore(disk = true, HybridStoreDiskBackend.ROCKSDB, live = false),
+    "in memory" -> createAppStore(disk = false, live = false),
+    "in memory live" -> createAppStore(disk = false, live = true)
+  ).foreach { case (hint, appStore) =>
     test(s"SPARK-26260: summary should contain only successful tasks' metrics (store = $hint)") {
       assume(appStore != null)
       val store = appStore.store
@@ -268,7 +249,6 @@ class AppStatusStoreSuite extends SparkFunSuite {
     new TaskDataWrapper(
       i.toLong, i, i, i, i, i, i,
       i.toString, i.toString, status, i.toString, false, Nil, None, true,
-      i, i, i, i, i, i, i, i, i, i,
       i, i, i, i, i, i, i, i, i, i,
       i, i, i, i, i, i, i, i, i, i,
       i, i, i, i, stageId, attemptId)

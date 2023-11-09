@@ -17,11 +17,9 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
-import scala.annotation.tailrec
-
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.expressions.aggregate.BloomFilterAggregate
-import org.apache.spark.sql.catalyst.planning.ExtractEquiJoinKeys
+import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, BloomFilterAggregate, Complete}
+import org.apache.spark.sql.catalyst.planning.{ExtractEquiJoinKeys, PhysicalOperation}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.trees.TreePattern.{INVOKE, JSON_TO_STRUCT, LIKE_FAMLIY, PYTHON_UDF, REGEXP_EXTRACT_FAMILY, REGEXP_REPLACE, SCALA_UDF}
@@ -79,12 +77,13 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
     val rowCount = filterCreationSidePlan.stats.rowCount
     val bloomFilterAgg =
       if (rowCount.isDefined && rowCount.get.longValue > 0L) {
-        new BloomFilterAggregate(new XxHash64(Seq(filterCreationSideExp)), rowCount.get.longValue)
+        new BloomFilterAggregate(new XxHash64(Seq(filterCreationSideExp)),
+          Literal(rowCount.get.longValue))
       } else {
         new BloomFilterAggregate(new XxHash64(Seq(filterCreationSideExp)))
       }
-
-    val alias = Alias(bloomFilterAgg.toAggregateExpression(), "bloomFilter")()
+    val aggExp = AggregateExpression(bloomFilterAgg, Complete, isDistinct = false, None)
+    val alias = Alias(aggExp, "bloomFilter")()
     val aggregate =
       ConstantFolding(ColumnPruning(Aggregate(Nil, Seq(alias), filterCreationSidePlan)))
     val bloomFilterSubquery = ScalarSubquery(aggregate, Nil)
@@ -101,8 +100,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
     require(filterApplicationSideExp.dataType == filterCreationSideExp.dataType)
     val actualFilterKeyExpr = mayWrapWithHash(filterCreationSideExp)
     val alias = Alias(actualFilterKeyExpr, actualFilterKeyExpr.toString)()
-    val aggregate =
-      ColumnPruning(Aggregate(Seq(filterCreationSideExp), Seq(alias), filterCreationSidePlan))
+    val aggregate = Aggregate(Seq(alias), Seq(alias), filterCreationSidePlan)
     if (!canBroadcastBySize(aggregate, conf)) {
       // Skip the InSubquery filter if the size of `aggregate` is beyond broadcast join threshold,
       // i.e., the semi-join will be a shuffled join, which is not worthwhile.
@@ -119,39 +117,13 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
    * do not add a subquery that might have an expensive computation
    */
   private def isSelectiveFilterOverScan(plan: LogicalPlan): Boolean = {
-    @tailrec
-    def isSelective(
-        p: LogicalPlan,
-        predicateReference: AttributeSet,
-        hasHitFilter: Boolean,
-        hasHitSelectiveFilter: Boolean): Boolean = p match {
-      case Project(projectList, child) =>
-        if (hasHitFilter) {
-          // We need to make sure all expressions referenced by filter predicates are simple
-          // expressions.
-          val referencedExprs = projectList.filter(predicateReference.contains)
-          referencedExprs.forall(isSimpleExpression) &&
-            isSelective(
-              child,
-              referencedExprs.map(_.references).foldLeft(AttributeSet.empty)(_ ++ _),
-              hasHitFilter,
-              hasHitSelectiveFilter)
-        } else {
-          assert(predicateReference.isEmpty && !hasHitSelectiveFilter)
-          isSelective(child, predicateReference, hasHitFilter, hasHitSelectiveFilter)
-        }
-      case Filter(condition, child) =>
-        isSimpleExpression(condition) && isSelective(
-          child,
-          predicateReference ++ condition.references,
-          hasHitFilter = true,
-          hasHitSelectiveFilter = hasHitSelectiveFilter || isLikelySelective(condition))
-      case _: LeafNode => hasHitSelectiveFilter
+    val ret = plan match {
+      case PhysicalOperation(_, filters, child) if child.isInstanceOf[LeafNode] =>
+        filters.forall(isSimpleExpression) &&
+          filters.exists(isLikelySelective)
       case _ => false
     }
-
-    !plan.isStreaming &&
-      isSelective(plan, AttributeSet.empty, hasHitFilter = false, hasHitSelectiveFilter = false)
+    !plan.isStreaming && ret
   }
 
   private def isSimpleExpression(e: Expression): Boolean = {
@@ -169,7 +141,6 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
     plan.exists {
       case Join(left, right, _, _, hint) => isProbablyShuffleJoin(left, right, hint)
       case _: Aggregate => true
-      case _: Window => true
       case _ => false
     }
   }
@@ -201,8 +172,8 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
 
   /**
    * Check that:
-   * - The filterApplicationSideJoinExp can be pushed down through joins, aggregates and windows
-   *   (ie the expression references originate from a single leaf node)
+   * - The filterApplicationSideJoinExp can be pushed down through joins and aggregates (ie the
+   *   expression references originate from a single leaf node)
    * - The filter creation side has a selective predicate
    * - The current join is a shuffle join or a broadcast join that has a shuffle below it
    * - The max filterApplicationSide scan size is greater than a configurable threshold
@@ -229,16 +200,15 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
   }
 
   // This checks if there is already a DPP filter, as this rule is called just after DPP.
-  @tailrec
   def hasDynamicPruningSubquery(
       left: LogicalPlan,
       right: LogicalPlan,
       leftKey: Expression,
       rightKey: Expression): Boolean = {
     (left, right) match {
-      case (Filter(DynamicPruningSubquery(pruningKey, _, _, _, _, _, _), plan), _) =>
+      case (Filter(DynamicPruningSubquery(pruningKey, _, _, _, _, _), plan), _) =>
         pruningKey.fastEquals(leftKey) || hasDynamicPruningSubquery(plan, right, leftKey, rightKey)
-      case (_, Filter(DynamicPruningSubquery(pruningKey, _, _, _, _, _, _), plan)) =>
+      case (_, Filter(DynamicPruningSubquery(pruningKey, _, _, _, _, _), plan)) =>
         pruningKey.fastEquals(rightKey) ||
           hasDynamicPruningSubquery(left, plan, leftKey, rightKey)
       case _ => false
@@ -269,10 +239,10 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
       rightKey: Expression): Boolean = {
     (left, right) match {
       case (Filter(InSubquery(Seq(key),
-      ListQuery(Aggregate(Seq(Alias(_, _)), Seq(Alias(_, _)), _), _, _, _, _, _)), _), _) =>
+      ListQuery(Aggregate(Seq(Alias(_, _)), Seq(Alias(_, _)), _), _, _, _, _)), _), _) =>
         key.fastEquals(leftKey) || key.fastEquals(new Murmur3Hash(Seq(leftKey)))
       case (_, Filter(InSubquery(Seq(key),
-      ListQuery(Aggregate(Seq(Alias(_, _)), Seq(Alias(_, _)), _), _, _, _, _, _)), _)) =>
+      ListQuery(Aggregate(Seq(Alias(_, _)), Seq(Alias(_, _)), _), _, _, _, _)), _)) =>
         key.fastEquals(rightKey) || key.fastEquals(new Murmur3Hash(Seq(rightKey)))
       case _ => false
     }
@@ -317,13 +287,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
     case s: Subquery if s.correlated => plan
     case _ if !conf.runtimeFilterSemiJoinReductionEnabled &&
       !conf.runtimeFilterBloomFilterEnabled => plan
-    case _ =>
-      val newPlan = tryInjectRuntimeFilter(plan)
-      if (conf.runtimeFilterSemiJoinReductionEnabled && !plan.fastEquals(newPlan)) {
-        RewritePredicateSubquery(newPlan)
-      } else {
-        newPlan
-      }
+    case _ => tryInjectRuntimeFilter(plan)
   }
 
 }

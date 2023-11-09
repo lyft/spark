@@ -24,8 +24,8 @@ import java.util.Locale
 import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.SQLConfHelper
 import org.apache.spark.sql.catalyst.analysis.{IndexAlreadyExistsException, NonEmptyNamespaceException, NoSuchIndexException}
-import org.apache.spark.sql.connector.catalog.Identifier
 import org.apache.spark.sql.connector.expressions.NamedReference
+import org.apache.spark.sql.connector.expressions.aggregate.{AggregateFunc, GeneralAggregateFunc}
 import org.apache.spark.sql.execution.datasources.jdbc.{JDBCOptions, JdbcUtils}
 import org.apache.spark.sql.execution.datasources.v2.TableSampleInfo
 import org.apache.spark.sql.types._
@@ -37,13 +37,41 @@ private object PostgresDialect extends JdbcDialect with SQLConfHelper {
     url.toLowerCase(Locale.ROOT).startsWith("jdbc:postgresql")
 
   // See https://www.postgresql.org/docs/8.4/functions-aggregate.html
-  private val supportedAggregateFunctions = Set("MAX", "MIN", "SUM", "COUNT", "AVG",
-    "VAR_POP", "VAR_SAMP", "STDDEV_POP", "STDDEV_SAMP", "COVAR_POP", "COVAR_SAMP", "CORR",
-    "REGR_INTERCEPT", "REGR_R2", "REGR_SLOPE", "REGR_SXY")
-  private val supportedFunctions = supportedAggregateFunctions
-
-  override def isSupportedFunction(funcName: String): Boolean =
-    supportedFunctions.contains(funcName)
+  override def compileAggregate(aggFunction: AggregateFunc): Option[String] = {
+    super.compileAggregate(aggFunction).orElse(
+      aggFunction match {
+        case f: GeneralAggregateFunc if f.name() == "VAR_POP" =>
+          assert(f.children().length == 1)
+          val distinct = if (f.isDistinct) "DISTINCT " else ""
+          Some(s"VAR_POP($distinct${f.children().head})")
+        case f: GeneralAggregateFunc if f.name() == "VAR_SAMP" =>
+          assert(f.children().length == 1)
+          val distinct = if (f.isDistinct) "DISTINCT " else ""
+          Some(s"VAR_SAMP($distinct${f.children().head})")
+        case f: GeneralAggregateFunc if f.name() == "STDDEV_POP" =>
+          assert(f.children().length == 1)
+          val distinct = if (f.isDistinct) "DISTINCT " else ""
+          Some(s"STDDEV_POP($distinct${f.children().head})")
+        case f: GeneralAggregateFunc if f.name() == "STDDEV_SAMP" =>
+          assert(f.children().length == 1)
+          val distinct = if (f.isDistinct) "DISTINCT " else ""
+          Some(s"STDDEV_SAMP($distinct${f.children().head})")
+        case f: GeneralAggregateFunc if f.name() == "COVAR_POP" =>
+          assert(f.children().length == 2)
+          val distinct = if (f.isDistinct) "DISTINCT " else ""
+          Some(s"COVAR_POP($distinct${f.children().head}, ${f.children().last})")
+        case f: GeneralAggregateFunc if f.name() == "COVAR_SAMP" =>
+          assert(f.children().length == 2)
+          val distinct = if (f.isDistinct) "DISTINCT " else ""
+          Some(s"COVAR_SAMP($distinct${f.children().head}, ${f.children().last})")
+        case f: GeneralAggregateFunc if f.name() == "CORR" =>
+          assert(f.children().length == 2)
+          val distinct = if (f.isDistinct) "DISTINCT " else ""
+          Some(s"CORR($distinct${f.children().head}, ${f.children().last})")
+        case _ => None
+      }
+    )
+  }
 
   override def getCatalystType(
       sqlType: Int, typeName: String, size: Int, md: MetadataBuilder): Option[DataType] = {
@@ -176,7 +204,7 @@ private object PostgresDialect extends JdbcDialect with SQLConfHelper {
   override def getTableSample(sample: TableSampleInfo): String = {
     // hard-coded to BERNOULLI for now because Spark doesn't have a way to specify sample
     // method name
-    "TABLESAMPLE BERNOULLI" +
+    s"TABLESAMPLE BERNOULLI" +
       s" (${(sample.upperBound - sample.lowerBound) * 100}) REPEATABLE (${sample.seed})"
   }
 
@@ -184,7 +212,7 @@ private object PostgresDialect extends JdbcDialect with SQLConfHelper {
   // https://www.postgresql.org/docs/14/sql-createindex.html
   override def createIndex(
       indexName: String,
-      tableIdent: Identifier,
+      tableName: String,
       columns: Array[NamedReference],
       columnsProperties: util.Map[NamedReference, util.Map[String, String]],
       properties: util.Map[String, String]): String = {
@@ -196,7 +224,7 @@ private object PostgresDialect extends JdbcDialect with SQLConfHelper {
       indexProperties = "WITH (" + indexPropertyList.mkString(", ") + ")"
     }
 
-    s"CREATE INDEX ${quoteIdentifier(indexName)} ON ${quoteIdentifier(tableIdent.name())}" +
+    s"CREATE INDEX ${quoteIdentifier(indexName)} ON ${quoteIdentifier(tableName)}" +
       s" $indexType (${columnList.mkString(", ")}) $indexProperties"
   }
 
@@ -205,16 +233,16 @@ private object PostgresDialect extends JdbcDialect with SQLConfHelper {
   override def indexExists(
       conn: Connection,
       indexName: String,
-      tableIdent: Identifier,
+      tableName: String,
       options: JDBCOptions): Boolean = {
-    val sql = s"SELECT * FROM pg_indexes WHERE tablename = '${tableIdent.name()}' AND" +
+    val sql = s"SELECT * FROM pg_indexes WHERE tablename = '$tableName' AND" +
       s" indexname = '$indexName'"
     JdbcUtils.checkIfIndexExists(conn, sql, options)
   }
 
   // DROP INDEX syntax
   // https://www.postgresql.org/docs/14/sql-dropindex.html
-  override def dropIndex(indexName: String, tableIdent: Identifier): String = {
+  override def dropIndex(indexName: String, tableName: String): String = {
     s"DROP INDEX ${quoteIdentifier(indexName)}"
   }
 
@@ -223,19 +251,8 @@ private object PostgresDialect extends JdbcDialect with SQLConfHelper {
       case sqlException: SQLException =>
         sqlException.getSQLState match {
           // https://www.postgresql.org/docs/14/errcodes-appendix.html
-          case "42P07" =>
-            // The message is: Failed to create index indexName in tableName
-            val regex = "(?s)Failed to create index (.*) in (.*)".r
-            val indexName = regex.findFirstMatchIn(message).get.group(1)
-            val tableName = regex.findFirstMatchIn(message).get.group(2)
-            throw new IndexAlreadyExistsException(
-              indexName = indexName, tableName = tableName, cause = Some(e))
-          case "42704" =>
-            // The message is: Failed to drop index indexName in tableName
-            val regex = "(?s)Failed to drop index (.*) in (.*)".r
-            val indexName = regex.findFirstMatchIn(message).get.group(1)
-            val tableName = regex.findFirstMatchIn(message).get.group(2)
-            throw new NoSuchIndexException(indexName, tableName, cause = Some(e))
+          case "42P07" => throw new IndexAlreadyExistsException(message, cause = Some(e))
+          case "42704" => throw new NoSuchIndexException(message, cause = Some(e))
           case "2BP01" => throw NonEmptyNamespaceException(message, cause = Some(e))
           case _ => super.classifyException(message, e)
         }

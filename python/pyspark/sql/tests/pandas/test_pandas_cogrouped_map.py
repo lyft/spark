@@ -18,10 +18,9 @@
 import unittest
 from typing import cast
 
-from pyspark.sql.functions import array, explode, col, lit, udf, pandas_udf, sum
+from pyspark.sql.functions import array, explode, col, lit, udf, pandas_udf
 from pyspark.sql.types import DoubleType, StructType, StructField, Row
-from pyspark.sql.window import Window
-from pyspark.errors import IllegalArgumentException, PythonException
+from pyspark.sql.utils import PythonException
 from pyspark.testing.sqlutils import (
     ReusedSQLTestCase,
     have_pandas,
@@ -43,7 +42,7 @@ if have_pyarrow:
     not have_pandas or not have_pyarrow,
     cast(str, pandas_requirement_message or pyarrow_requirement_message),
 )
-class CogroupedApplyInPandasTestsMixin(ReusedSQLTestCase):
+class CogroupedMapInPandasTests(ReusedSQLTestCase):
     @property
     def data1(self):
         return (
@@ -80,29 +79,6 @@ class CogroupedApplyInPandasTestsMixin(ReusedSQLTestCase):
     def test_different_schemas(self):
         right = self.data2.withColumn("v3", lit("a"))
         self._test_merge(self.data1, right, "id long, k int, v int, v2 int, v3 string")
-
-    def test_different_keys(self):
-        left = self.data1
-        right = self.data2
-
-        def merge_pandas(lft, rgt):
-            return pd.merge(lft.rename(columns={"id2": "id"}), rgt, on=["id", "k"])
-
-        result = (
-            left.withColumnRenamed("id", "id2")
-            .groupby("id2")
-            .cogroup(right.groupby("id"))
-            .applyInPandas(merge_pandas, "id long, k int, v int, v2 int")
-            .sort(["id", "k"])
-            .toPandas()
-        )
-
-        left = left.toPandas()
-        right = right.toPandas()
-
-        expected = pd.merge(left, right, on=["id", "k"]).sort_values(by=["id", "k"])
-
-        assert_frame_equal(expected, result)
 
     def test_complex_group_by(self):
         left = pd.DataFrame.from_dict({"id": [1, 2, 3], "k": [5, 6, 7], "v": [9, 10, 11]})
@@ -148,22 +124,6 @@ class CogroupedApplyInPandasTestsMixin(ReusedSQLTestCase):
         expected = pd.merge(left, right, on=["id", "k"]).sort_values(by=["id", "k"])
 
         assert_frame_equal(expected, result)
-
-    def test_different_group_key_cardinality(self):
-        left = self.data1
-        right = self.data2
-
-        def merge_pandas(lft, _):
-            return lft
-
-        with QuietTest(self.sc):
-            with self.assertRaisesRegex(
-                IllegalArgumentException,
-                "requirement failed: Cogroup keys must have same size: 2 != 1",
-            ):
-                (left.groupby("id", "k").cogroup(right.groupby("id"))).applyInPandas(
-                    merge_pandas, "id long, k int, v int"
-                )
 
     def test_apply_in_pandas_not_returning_pandas_dataframe(self):
         left = self.data1
@@ -366,57 +326,6 @@ class CogroupedApplyInPandasTestsMixin(ReusedSQLTestCase):
 
         self.assertEqual(row.asDict(), Row(column=2, value=2).asDict())
 
-    def test_with_window_function(self):
-        # SPARK-42168: a window function with same partition keys but differing key order
-        ids = 2
-        days = 100
-        vals = 10000
-        parts = 10
-
-        id_df = self.spark.range(ids)
-        day_df = self.spark.range(days).withColumnRenamed("id", "day")
-        vals_df = self.spark.range(vals).withColumnRenamed("id", "value")
-        df = id_df.join(day_df).join(vals_df)
-
-        left_df = df.withColumnRenamed("value", "left").repartition(parts).cache()
-        # SPARK-42132: this bug requires us to alias all columns from df here
-        right_df = (
-            df.select(col("id").alias("id"), col("day").alias("day"), col("value").alias("right"))
-            .repartition(parts)
-            .cache()
-        )
-
-        # note the column order is different to the groupBy("id", "day") column order below
-        window = Window.partitionBy("day", "id")
-
-        left_grouped_df = left_df.groupBy("id", "day")
-        right_grouped_df = right_df.withColumn("day_sum", sum(col("day")).over(window)).groupBy(
-            "id", "day"
-        )
-
-        def cogroup(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
-            return pd.DataFrame(
-                [
-                    {
-                        "id": left["id"][0]
-                        if not left.empty
-                        else (right["id"][0] if not right.empty else None),
-                        "day": left["day"][0]
-                        if not left.empty
-                        else (right["day"][0] if not right.empty else None),
-                        "lefts": len(left.index),
-                        "rights": len(right.index),
-                    }
-                ]
-            )
-
-        df = left_grouped_df.cogroup(right_grouped_df).applyInPandas(
-            cogroup, schema="id long, day long, lefts integer, rights integer"
-        )
-
-        actual = df.orderBy("id", "day").take(days)
-        self.assertEqual(actual, [Row(0, day, vals, vals) for day in range(days)])
-
     @staticmethod
     def _test_with_key(left, right, isLeft):
         def right_assign_key(key, lft, rgt):
@@ -455,15 +364,11 @@ class CogroupedApplyInPandasTestsMixin(ReusedSQLTestCase):
         assert_frame_equal(expected, result)
 
 
-class CogroupedMapInPandasTests(CogroupedApplyInPandasTestsMixin, ReusedSQLTestCase):
-    pass
-
-
 if __name__ == "__main__":
-    from pyspark.sql.tests.pandas.test_pandas_cogrouped_map import *  # noqa: F401
+    from pyspark.sql.tests.test_pandas_cogrouped_map import *  # noqa: F401
 
     try:
-        import xmlrunner
+        import xmlrunner  # type: ignore[import]
 
         testRunner = xmlrunner.XMLTestRunner(output="target/test-reports", verbosity=2)
     except ImportError:

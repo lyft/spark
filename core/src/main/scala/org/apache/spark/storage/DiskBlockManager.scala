@@ -19,7 +19,7 @@ package org.apache.spark.storage
 
 import java.io.{File, IOException}
 import java.nio.file.Files
-import java.nio.file.attribute.{PosixFilePermission, PosixFilePermissions}
+import java.nio.file.attribute.PosixFilePermission
 import java.util.UUID
 
 import scala.collection.mutable.HashMap
@@ -301,6 +301,9 @@ private[spark] class DiskBlockManager(
    * Create a directory that is writable by the group.
    * Grant the permission 770 "rwxrwx---" to the directory so the shuffle server can
    * create subdirs/files within the merge folder.
+   * TODO: Find out why can't we create a dir using java api with permission 770
+   *  Files.createDirectories(mergeDir.toPath, PosixFilePermissions.asFileAttribute(
+   *  PosixFilePermissions.fromString("rwxrwx---")))
    */
   def createDirWithPermission770(dirToCreate: File): Unit = {
     var attempts = 0
@@ -312,13 +315,16 @@ private[spark] class DiskBlockManager(
         throw SparkCoreErrors.failToCreateDirectoryError(dirToCreate.getAbsolutePath, maxAttempts)
       }
       try {
-        dirToCreate.mkdirs()
-        Files.setPosixFilePermissions(
-          dirToCreate.toPath, PosixFilePermissions.fromString("rwxrwx---"))
+        val builder = new ProcessBuilder().command(
+          "mkdir", "-p", "-m770", dirToCreate.getAbsolutePath)
+        val proc = builder.start()
+        val exitCode = proc.waitFor()
         if (dirToCreate.exists()) {
           created = dirToCreate
         }
-        logDebug(s"Created directory at ${dirToCreate.getAbsolutePath} with permission 770")
+        logDebug(
+          s"Created directory at ${dirToCreate.getAbsolutePath} with permission " +
+            s"770 and exitCode $exitCode")
       } catch {
         case e: SecurityException =>
           logWarning(s"Failed to create directory ${dirToCreate.getAbsolutePath} " +

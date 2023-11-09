@@ -3664,7 +3664,7 @@ object functions {
    * processing time.
    *
    * @param timeColumn The column or the expression to use as the timestamp for windowing by time.
-   *                   The time column must be of TimestampType or TimestampNTZType.
+   *                   The time column must be of TimestampType.
    * @param windowDuration A string specifying the width of the window, e.g. `10 minutes`,
    *                       `1 second`. Check `org.apache.spark.unsafe.types.CalendarInterval` for
    *                       valid duration identifiers. Note that the duration is a fixed length of
@@ -3720,7 +3720,7 @@ object functions {
    * processing time.
    *
    * @param timeColumn The column or the expression to use as the timestamp for windowing by time.
-   *                   The time column must be of TimestampType or TimestampNTZType.
+   *                   The time column must be of TimestampType.
    * @param windowDuration A string specifying the width of the window, e.g. `10 minutes`,
    *                       `1 second`. Check `org.apache.spark.unsafe.types.CalendarInterval` for
    *                       valid duration identifiers. Note that the duration is a fixed length of
@@ -3765,7 +3765,7 @@ object functions {
    * processing time.
    *
    * @param timeColumn The column or the expression to use as the timestamp for windowing by time.
-   *                   The time column must be of TimestampType or TimestampNTZType.
+   *                   The time column must be of TimestampType.
    * @param windowDuration A string specifying the width of the window, e.g. `10 minutes`,
    *                       `1 second`. Check `org.apache.spark.unsafe.types.CalendarInterval` for
    *                       valid duration identifiers.
@@ -3810,7 +3810,7 @@ object functions {
    * processing time.
    *
    * @param timeColumn The column or the expression to use as the timestamp for windowing by time.
-   *                   The time column must be of TimestampType or TimestampNTZType.
+   *                   The time column must be of TimestampType.
    * @param gapDuration A string specifying the timeout of the session, e.g. `10 minutes`,
    *                    `1 second`. Check `org.apache.spark.unsafe.types.CalendarInterval` for
    *                    valid duration identifiers.
@@ -3847,7 +3847,7 @@ object functions {
    * processing time.
    *
    * @param timeColumn The column or the expression to use as the timestamp for windowing by time.
-   *                   The time column must be of TimestampType or TimestampNTZType.
+   *                   The time column must be of TimestampType.
    * @param gapDuration A column specifying the timeout of the session. It could be static value,
    *                    e.g. `10 minutes`, `1 second`, or an expression/UDF that specifies gap
    *                    duration dynamically based on the input row.

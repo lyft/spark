@@ -153,30 +153,6 @@ case class CurrentDate(timeZoneId: Option[String] = None)
   override def prettyName: String = "current_date"
 }
 
-// scalastyle:off line.size.limit
-@ExpressionDescription(
-  usage = """
-    _FUNC_() - Returns the current date at the start of query evaluation. All calls of curdate within the same query return the same value.
-  """,
-  examples = """
-    Examples:
-      > SELECT _FUNC_();
-       2022-09-06
-  """,
-  group = "datetime_funcs",
-  since = "3.4.0")
-// scalastyle:on line.size.limit
-object CurDateExpressionBuilder extends ExpressionBuilder {
-  override def build(funcName: String, expressions: Seq[Expression]): Expression = {
-    if (expressions.isEmpty) {
-      CurrentDate()
-    } else {
-      throw QueryCompilationErrors.wrongNumArgsError(
-        funcName, Seq(0), expressions.length)
-    }
-  }
-}
-
 abstract class CurrentTimestampLike() extends LeafExpression with CodegenFallback {
   override def foldable: Boolean = true
   override def nullable: Boolean = false
@@ -1143,7 +1119,7 @@ object ParseToTimestampNTZExpressionBuilder extends ExpressionBuilder {
     if (numArgs == 1 || numArgs == 2) {
       ParseToTimestamp(expressions(0), expressions.drop(1).lastOption, TimestampNTZType)
     } else {
-      throw QueryCompilationErrors.wrongNumArgsError(funcName, Seq(1, 2), numArgs)
+      throw QueryCompilationErrors.invalidFunctionArgumentNumberError(Seq(1, 2), funcName, numArgs)
     }
   }
 }
@@ -1180,51 +1156,7 @@ object ParseToTimestampLTZExpressionBuilder extends ExpressionBuilder {
     if (numArgs == 1 || numArgs == 2) {
       ParseToTimestamp(expressions(0), expressions.drop(1).lastOption, TimestampType)
     } else {
-      throw QueryCompilationErrors.wrongNumArgsError(funcName, Seq(1, 2), numArgs)
-    }
-  }
-}
-
-/**
- * * Parses a column to a timestamp based on the supplied format.
- */
-// scalastyle:off line.size.limit
-@ExpressionDescription(
-  usage = """
-    _FUNC_(timestamp_str[, fmt]) - Parses the `timestamp_str` expression with the `fmt` expression
-      to a timestamp. The function always returns null on an invalid input with/without ANSI SQL
-      mode enabled. By default, it follows casting rules to a timestamp if the `fmt` is omitted.
-      The result data type is consistent with the value of configuration `spark.sql.timestampType`.
-  """,
-  arguments = """
-    Arguments:
-      * timestamp_str - A string to be parsed to timestamp.
-      * fmt - Timestamp format pattern to follow. See <a href="https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html">Datetime Patterns</a> for valid
-              date and time format patterns.
-  """,
-  examples = """
-    Examples:
-      > SELECT _FUNC_('2016-12-31 00:12:00');
-       2016-12-31 00:12:00
-      > SELECT _FUNC_('2016-12-31', 'yyyy-MM-dd');
-       2016-12-31 00:00:00
-      > SELECT _FUNC_('foo', 'yyyy-MM-dd');
-       NULL
-  """,
-  group = "datetime_funcs",
-  since = "3.4.0")
-// scalastyle:on line.size.limit
-object TryToTimestampExpressionBuilder extends ExpressionBuilder {
-  override def build(funcName: String, expressions: Seq[Expression]): Expression = {
-    val numArgs = expressions.length
-    if (numArgs == 1 || numArgs == 2) {
-      ParseToTimestamp(
-        expressions.head,
-        expressions.drop(1).lastOption,
-        SQLConf.get.timestampType,
-        failOnError = false)
-    } else {
-      throw QueryCompilationErrors.wrongNumArgsError(funcName, Seq(1, 2), numArgs)
+      throw QueryCompilationErrors.invalidFunctionArgumentNumberError(Seq(1, 2), funcName, numArgs)
     }
   }
 }
@@ -1279,10 +1211,12 @@ abstract class ToTimestamp
                 formatter.parse(t.asInstanceOf[UTF8String].toString) / downScaleFactor
               }
             } catch {
+              case e: DateTimeParseException if failOnError =>
+                throw QueryExecutionErrors.ansiDateTimeParseError(e)
               case e: DateTimeException if failOnError =>
-                throw QueryExecutionErrors.ansiDateTimeParseError(e)
+                throw QueryExecutionErrors.ansiDateTimeError(e)
               case e: ParseException if failOnError =>
-                throw QueryExecutionErrors.ansiDateTimeParseError(e)
+                throw QueryExecutionErrors.ansiParseError(e)
               case e if isParseError(e) => null
             }
           }
@@ -1292,8 +1226,8 @@ abstract class ToTimestamp
 
   override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
     val javaType = CodeGenerator.javaType(dataType)
-    val parseErrorBranch: String = if (failOnError) {
-      "throw QueryExecutionErrors.ansiDateTimeParseError(e);"
+    def parseErrorBranch(method: String): String = if (failOnError) {
+      s"throw QueryExecutionErrors.$method(e);"
     } else {
       s"${ev.isNull} = true;"
     }
@@ -1316,10 +1250,12 @@ abstract class ToTimestamp
           s"""
              |try {
              |  ${ev.value} = $formatterName.$parseMethod($datetimeStr.toString()) $downScaleCode;
+             |} catch (java.time.format.DateTimeParseException e) {
+             |  ${parseErrorBranch("ansiDateTimeParseError")}
              |} catch (java.time.DateTimeException e) {
-             |  ${parseErrorBranch}
+             |  ${parseErrorBranch("ansiDateTimeError")}
              |} catch (java.text.ParseException e) {
-             |  ${parseErrorBranch}
+             |  ${parseErrorBranch("ansiParseError")}
              |}
              |""".stripMargin)
       }.getOrElse {
@@ -1336,10 +1272,12 @@ abstract class ToTimestamp
              |  true);
              |try {
              |  ${ev.value} = $timestampFormatter.$parseMethod($string.toString()) $downScaleCode;
+             |} catch (java.time.format.DateTimeParseException e) {
+             |    ${parseErrorBranch("ansiDateTimeParseError")}
              |} catch (java.time.DateTimeException e) {
-             |    ${parseErrorBranch}
+             |    ${parseErrorBranch("ansiDateTimeError")}
              |} catch (java.text.ParseException e) {
-             |    ${parseErrorBranch}
+             |    ${parseErrorBranch("ansiParseError")}
              |}
              |""".stripMargin)
       }
@@ -2116,13 +2054,12 @@ case class ParseToTimestamp(
     left: Expression,
     format: Option[Expression],
     override val dataType: DataType,
-    timeZoneId: Option[String] = None,
-    failOnError: Boolean = SQLConf.get.ansiEnabled)
+    timeZoneId: Option[String] = None)
   extends RuntimeReplaceable with ImplicitCastInputTypes with TimeZoneAwareExpression {
 
   override lazy val replacement: Expression = format.map { f =>
-    GetTimestamp(left, f, dataType, timeZoneId, failOnError = failOnError)
-  }.getOrElse(Cast(left, dataType, timeZoneId, ansiEnabled = failOnError))
+    GetTimestamp(left, f, dataType, timeZoneId)
+  }.getOrElse(Cast(left, dataType, timeZoneId))
 
   def this(left: Expression, format: Expression) = {
     this(left, Option(format), SQLConf.get.timestampType)
@@ -2518,7 +2455,7 @@ object MakeTimestampNTZExpressionBuilder extends ExpressionBuilder {
         expressions(5),
         dataType = TimestampNTZType)
     } else {
-      throw QueryCompilationErrors.wrongNumArgsError(funcName, Seq(6), numArgs)
+      throw QueryCompilationErrors.invalidFunctionArgumentNumberError(Seq(6), funcName, numArgs)
     }
   }
 }
@@ -2566,7 +2503,7 @@ object MakeTimestampLTZExpressionBuilder extends ExpressionBuilder {
         expressions.drop(6).lastOption,
         dataType = TimestampType)
     } else {
-      throw QueryCompilationErrors.wrongNumArgsError(funcName, Seq(6), numArgs)
+      throw QueryCompilationErrors.invalidFunctionArgumentNumberError(Seq(6), funcName, numArgs)
     }
   }
 }
@@ -2837,7 +2774,7 @@ object DatePartExpressionBuilder extends ExpressionBuilder {
       val source = expressions(1)
       Extract(field, source, Extract.createExpr(funcName, field, source))
     } else {
-      throw QueryCompilationErrors.wrongNumArgsError(funcName, Seq(2), numArgs)
+      throw QueryCompilationErrors.invalidFunctionArgumentNumberError(Seq(2), funcName, numArgs)
     }
   }
 }
@@ -3072,9 +3009,9 @@ object SubtractDates {
   """,
   examples = """
     Examples:
-      > SELECT _FUNC_('Europe/Brussels', 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00');
+      > SELECT _FUNC_('Europe/Amsterdam', 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00');
        2021-12-05 15:00:00
-      > SELECT _FUNC_('Europe/Brussels', timestamp_ntz'2021-12-05 15:00:00');
+      > SELECT _FUNC_('Europe/Amsterdam', timestamp_ntz'2021-12-05 15:00:00');
        2021-12-06 00:00:00
   """,
   group = "datetime_funcs",

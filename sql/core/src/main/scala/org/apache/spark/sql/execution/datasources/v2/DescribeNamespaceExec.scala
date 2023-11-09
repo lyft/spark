@@ -38,7 +38,6 @@ case class DescribeNamespaceExec(
     val ns = namespace.toArray
     val metadata = catalog.loadNamespaceMetadata(ns)
 
-    rows += toCatalystRow("Catalog Name", catalog.name())
     rows += toCatalystRow("Namespace Name", ns.quoted)
 
     CatalogV2Util.NAMESPACE_RESERVED_PROPERTIES.foreach { p =>
@@ -51,7 +50,7 @@ case class DescribeNamespaceExec(
         if (properties.isEmpty) {
           ""
         } else {
-          conf.redactOptions(properties.toMap).toSeq.sortBy(_._1).mkString("(", ", ", ")")
+          properties.toSeq.sortBy(_._1).mkString("(", ", ", ")")
         }
       rows += toCatalystRow("Properties", propertiesStr)
     }

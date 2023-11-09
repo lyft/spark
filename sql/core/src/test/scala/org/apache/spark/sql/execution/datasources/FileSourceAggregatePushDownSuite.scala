@@ -20,7 +20,7 @@ package org.apache.spark.sql.execution.datasources
 import java.sql.{Date, Timestamp}
 
 import org.apache.spark.SparkConf
-import org.apache.spark.sql.{DataFrame, ExplainSuiteHelper, QueryTest, Row}
+import org.apache.spark.sql.{ExplainSuiteHelper, QueryTest, Row}
 import org.apache.spark.sql.execution.datasources.orc.OrcTest
 import org.apache.spark.sql.execution.datasources.parquet.ParquetTest
 import org.apache.spark.sql.execution.datasources.v2.DataSourceV2ScanRelation
@@ -49,7 +49,12 @@ trait FileSourceAggregatePushDownSuite
     withSQLConf(aggPushDownEnabledKey -> "true") {
       withDataSourceTable(data, "t") {
         val max = sql("SELECT Max(_1) FROM t")
-        checkPushedInfo(max, "PushedAggregation: []")
+        max.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: []"
+            checkKeywordsExistsInExplain(max, expected_plan_fragment)
+        }
       }
     }
   }
@@ -59,7 +64,12 @@ trait FileSourceAggregatePushDownSuite
     withSQLConf(aggPushDownEnabledKey -> "true") {
       withDataSourceTable(data, "t") {
         val count = sql("SELECT Count(_1) FROM t")
-        checkPushedInfo(count, "PushedAggregation: [COUNT(_1)]")
+        count.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: [COUNT(_1)]"
+            checkKeywordsExistsInExplain(count, expected_plan_fragment)
+        }
         checkAnswer(count, Seq(Row(10)))
       }
     }
@@ -70,7 +80,12 @@ trait FileSourceAggregatePushDownSuite
     withSQLConf(aggPushDownEnabledKey-> "true") {
       withDataSourceTable(data, "t") {
         val max = sql("SELECT Max(_1._2[0]) FROM t")
-        checkPushedInfo(max, "PushedAggregation: []")
+        max.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: []"
+            checkKeywordsExistsInExplain(max, expected_plan_fragment)
+        }
       }
     }
   }
@@ -80,7 +95,12 @@ trait FileSourceAggregatePushDownSuite
     withSQLConf(aggPushDownEnabledKey -> "true") {
       withDataSourceTable(data, "t") {
         val count = sql("SELECT Count(_1._2[0]) FROM t")
-        checkPushedInfo(count, "PushedAggregation: []")
+        count.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: []"
+            checkKeywordsExistsInExplain(count, expected_plan_fragment)
+        }
         checkAnswer(count, Seq(Row(10)))
       }
     }
@@ -94,7 +114,12 @@ trait FileSourceAggregatePushDownSuite
         spark.read.format(format).load(dir.getCanonicalPath).createOrReplaceTempView("tmp")
         withSQLConf(aggPushDownEnabledKey -> "true") {
           val max = sql("SELECT Max(p) FROM tmp")
-          checkPushedInfo(max, "PushedAggregation: []")
+          max.queryExecution.optimizedPlan.collect {
+            case _: DataSourceV2ScanRelation =>
+              val expected_plan_fragment =
+                "PushedAggregation: []"
+              checkKeywordsExistsInExplain(max, expected_plan_fragment)
+          }
           checkAnswer(max, Seq(Row(2)))
         }
       }
@@ -112,7 +137,12 @@ trait FileSourceAggregatePushDownSuite
           withSQLConf(aggPushDownEnabledKey -> "true",
             vectorizedReaderEnabledKey -> testVectorizedReader) {
             val count = sql("SELECT COUNT(p) FROM tmp")
-            checkPushedInfo(count, "PushedAggregation: [COUNT(p)]")
+            count.queryExecution.optimizedPlan.collect {
+              case _: DataSourceV2ScanRelation =>
+                val expected_plan_fragment =
+                  "PushedAggregation: [COUNT(p)]"
+                checkKeywordsExistsInExplain(count, expected_plan_fragment)
+            }
             checkAnswer(count, Seq(Row(10)))
           }
         }
@@ -126,7 +156,12 @@ trait FileSourceAggregatePushDownSuite
     withDataSourceTable(data, "t") {
       withSQLConf(aggPushDownEnabledKey -> "true") {
         val selectAgg = sql("SELECT min(_1) + max(_1) as res FROM t having res > 1")
-        checkPushedInfo(selectAgg, "PushedAggregation: [MIN(_1), MAX(_1)]")
+        selectAgg.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: [MIN(_1), MAX(_1)]"
+            checkKeywordsExistsInExplain(selectAgg, expected_plan_fragment)
+        }
         checkAnswer(selectAgg, Seq(Row(7)))
       }
     }
@@ -138,7 +173,12 @@ trait FileSourceAggregatePushDownSuite
     withDataSourceTable(data, "t") {
       withSQLConf(aggPushDownEnabledKey -> "true") {
         val selectAgg = sql("SELECT min(_1) + 1 as minPlus1, min(_1) + 2 as minPlus2 FROM t")
-        checkPushedInfo(selectAgg, "PushedAggregation: [MIN(_1)]")
+        selectAgg.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: [MIN(_1)]"
+            checkKeywordsExistsInExplain(selectAgg, expected_plan_fragment)
+        }
         checkAnswer(selectAgg, Seq(Row(-1, 0)))
       }
     }
@@ -151,7 +191,12 @@ trait FileSourceAggregatePushDownSuite
       withSQLConf(aggPushDownEnabledKey -> "true") {
         val df = spark.table("t")
         val query = df.select($"_1".as("col1")).agg(min($"col1"))
-        checkPushedInfo(query, "PushedAggregation: [MIN(_1)]")
+        query.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: [MIN(_1)]"
+            checkKeywordsExistsInExplain(query, expected_plan_fragment)
+        }
         checkAnswer(query, Seq(Row(-2)))
       }
     }
@@ -164,7 +209,12 @@ trait FileSourceAggregatePushDownSuite
       withSQLConf(aggPushDownEnabledKey -> "true") {
         // aggregate not pushed down if there is group by
         val selectAgg = sql("SELECT min(_1) FROM t GROUP BY _3 ")
-        checkPushedInfo(selectAgg, "PushedAggregation: []")
+        selectAgg.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: []"
+            checkKeywordsExistsInExplain(selectAgg, expected_plan_fragment)
+        }
         checkAnswer(selectAgg, Seq(Row(-2), Row(0), Row(2), Row(3)))
       }
     }
@@ -177,7 +227,12 @@ trait FileSourceAggregatePushDownSuite
       withSQLConf(aggPushDownEnabledKey -> "true") {
         // aggregate not pushed down if there is filter
         val selectAgg = sql("SELECT min(_3) FROM t WHERE _1 > 0")
-        checkPushedInfo(selectAgg, "PushedAggregation: []")
+        selectAgg.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: []"
+            checkKeywordsExistsInExplain(selectAgg, expected_plan_fragment)
+        }
         checkAnswer(selectAgg, Seq(Row(2)))
       }
     }
@@ -193,7 +248,12 @@ trait FileSourceAggregatePushDownSuite
           withSQLConf(aggPushDownEnabledKey -> "true",
             vectorizedReaderEnabledKey -> enableVectorizedReader) {
             val max = sql("SELECT max(id), min(id), count(id) FROM tmp WHERE p = 0")
-            checkPushedInfo(max, "PushedAggregation: [MAX(id), MIN(id), COUNT(id)]")
+            max.queryExecution.optimizedPlan.collect {
+              case _: DataSourceV2ScanRelation =>
+                val expected_plan_fragment =
+                  "PushedAggregation: [MAX(id), MIN(id), COUNT(id)]"
+                checkKeywordsExistsInExplain(max, expected_plan_fragment)
+            }
             checkAnswer(max, Seq(Row(9, 0, 4)))
           }
         }
@@ -217,10 +277,13 @@ trait FileSourceAggregatePushDownSuite
           withSQLConf(aggPushDownEnabledKey -> "true",
             vectorizedReaderEnabledKey -> enableVectorizedReader) {
             val df = sql(query)
-            val expected_plan_fragment =
-              "PushedAggregation: [COUNT(*), COUNT(id), MAX(id), COUNT(p), MIN(id)], " +
-                "PushedFilters: [], PushedGroupBy: [p]"
-            checkPushedInfo(df, expected_plan_fragment)
+            df.queryExecution.optimizedPlan.collect {
+              case _: DataSourceV2ScanRelation =>
+                val expected_plan_fragment =
+                  "PushedAggregation: [COUNT(*), COUNT(id), MAX(id), COUNT(p), MIN(id)], " +
+                    "PushedFilters: [], PushedGroupBy: [p]"
+                checkKeywordsExistsInExplain(df, expected_plan_fragment)
+            }
             checkAnswer(df, expected)
           }
         }
@@ -251,10 +314,13 @@ trait FileSourceAggregatePushDownSuite
           withSQLConf(aggPushDownEnabledKey -> "true",
             vectorizedReaderEnabledKey -> enableVectorizedReader) {
             val df = sql(query)
-            val expected_plan_fragment =
-              "PushedAggregation: [COUNT(*), COUNT(value), MAX(value), MIN(value)]," +
-                " PushedFilters: [], PushedGroupBy: [p1, p2, p3, p4]"
-            checkPushedInfo(df, expected_plan_fragment)
+            df.queryExecution.optimizedPlan.collect {
+              case _: DataSourceV2ScanRelation =>
+                val expected_plan_fragment =
+                  "PushedAggregation: [COUNT(*), COUNT(value), MAX(value), MIN(value)]," +
+                    " PushedFilters: [], PushedGroupBy: [p1, p2, p3, p4]"
+                checkKeywordsExistsInExplain(df, expected_plan_fragment)
+            }
             checkAnswer(df, expected)
           }
         }
@@ -269,7 +335,12 @@ trait FileSourceAggregatePushDownSuite
       withSQLConf(aggPushDownEnabledKey -> "true") {
         // not push down since sum can't be pushed down
         val selectAgg = sql("SELECT min(_1), sum(_3) FROM t")
-        checkPushedInfo(selectAgg, "PushedAggregation: []")
+        selectAgg.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: []"
+            checkKeywordsExistsInExplain(selectAgg, expected_plan_fragment)
+        }
         checkAnswer(selectAgg, Seq(Row(-2, 41)))
       }
     }
@@ -282,16 +353,20 @@ trait FileSourceAggregatePushDownSuite
       withSQLConf(aggPushDownEnabledKey -> "true") {
         val selectAgg = sql("SELECT min(_3), min(_3), max(_3), min(_1), max(_1), max(_1)," +
           " count(*), count(_1), count(_2), count(_3) FROM t")
-        val expected_plan_fragment =
-          "PushedAggregation: [MIN(_3), " +
-            "MAX(_3), " +
-            "MIN(_1), " +
-            "MAX(_1), " +
-            "COUNT(*), " +
-            "COUNT(_1), " +
-            "COUNT(_2), " +
-            "COUNT(_3)]"
-        checkPushedInfo(selectAgg, expected_plan_fragment)
+        selectAgg.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: [MIN(_3), " +
+                "MAX(_3), " +
+                "MIN(_1), " +
+                "MAX(_1), " +
+                "COUNT(*), " +
+                "COUNT(_1), " +
+                "COUNT(_2), " +
+                "COUNT(_3)]"
+            checkKeywordsExistsInExplain(selectAgg, expected_plan_fragment)
+        }
+
         checkAnswer(selectAgg, Seq(Row(2, 2, 19, -2, 9, 9, 6, 6, 4, 6)))
       }
     }
@@ -313,7 +388,13 @@ trait FileSourceAggregatePushDownSuite
             |  count(CASE WHEN _3 != 5 OR _2 IS NULL THEN 1 ELSE 0 END)
             |FROM t
           """.stripMargin)
-        checkPushedInfo(selectAgg, "PushedAggregation: []")
+        selectAgg.queryExecution.optimizedPlan.collect {
+          case _: DataSourceV2ScanRelation =>
+            val expected_plan_fragment =
+              "PushedAggregation: []"
+            checkKeywordsExistsInExplain(selectAgg, expected_plan_fragment)
+        }
+
         checkAnswer(selectAgg, Seq(Row(0, 0, 9, 1, 6, 6)))
       }
     }
@@ -326,6 +407,13 @@ trait FileSourceAggregatePushDownSuite
       expectedMaxWithAllTypes: Seq[Row],
       expectedMaxWithOutTSAndBinary: Seq[Row],
       expectedCount: Seq[Row]): Unit = {
+    implicit class StringToDate(s: String) {
+      def date: Date = Date.valueOf(s)
+    }
+
+    implicit class StringToTs(s: String) {
+      def ts: Timestamp = Timestamp.valueOf(s)
+    }
 
     val schema = StructType(List(StructField("StringCol", StringType, true),
       StructField("BooleanCol", BooleanType, false),
@@ -347,8 +435,7 @@ trait FileSourceAggregatePushDownSuite
         spark.read.format(format).load(file.getCanonicalPath).createOrReplaceTempView("test")
         Seq("false", "true").foreach { enableVectorizedReader =>
           withSQLConf(aggPushDownEnabledKey -> "true",
-            vectorizedReaderEnabledKey -> enableVectorizedReader,
-            SQLConf.MAX_METADATA_STRING_LENGTH.key -> "1000") {
+            vectorizedReaderEnabledKey -> enableVectorizedReader) {
 
             val testMinWithAllTypes = sql("SELECT min(StringCol), min(BooleanCol), min(ByteCol), " +
               "min(BinaryCol), min(ShortCol), min(IntegerCol), min(LongCol), min(FloatCol), " +
@@ -359,23 +446,33 @@ trait FileSourceAggregatePushDownSuite
             // In addition, Parquet Binary min/max could be truncated, so we disable aggregate
             // push down for Parquet Binary (could be Spark StringType, BinaryType or DecimalType).
             // Also do not push down for ORC with same reason.
-            checkPushedInfo(testMinWithAllTypes, "PushedAggregation: []")
+            testMinWithAllTypes.queryExecution.optimizedPlan.collect {
+              case _: DataSourceV2ScanRelation =>
+                val expected_plan_fragment =
+                  "PushedAggregation: []"
+                checkKeywordsExistsInExplain(testMinWithAllTypes, expected_plan_fragment)
+            }
+
             checkAnswer(testMinWithAllTypes, expectedMinWithAllTypes)
 
             val testMinWithOutTSAndBinary = sql("SELECT min(BooleanCol), min(ByteCol), " +
               "min(ShortCol), min(IntegerCol), min(LongCol), min(FloatCol), " +
               "min(DoubleCol), min(DateCol) FROM test")
 
-            var expected_plan_fragment =
-              "PushedAggregation: [MIN(BooleanCol), " +
-                "MIN(ByteCol), " +
-                "MIN(ShortCol), " +
-                "MIN(IntegerCol), " +
-                "MIN(LongCol), " +
-                "MIN(FloatCol), " +
-                "MIN(DoubleCol), " +
-                "MIN(DateCol)]"
-            checkPushedInfo(testMinWithOutTSAndBinary, expected_plan_fragment)
+            testMinWithOutTSAndBinary.queryExecution.optimizedPlan.collect {
+              case _: DataSourceV2ScanRelation =>
+                val expected_plan_fragment =
+                  "PushedAggregation: [MIN(BooleanCol), " +
+                    "MIN(ByteCol), " +
+                    "MIN(ShortCol), " +
+                    "MIN(IntegerCol), " +
+                    "MIN(LongCol), " +
+                    "MIN(FloatCol), " +
+                    "MIN(DoubleCol), " +
+                    "MIN(DateCol)]"
+                checkKeywordsExistsInExplain(testMinWithOutTSAndBinary, expected_plan_fragment)
+            }
+
             checkAnswer(testMinWithOutTSAndBinary, expectedMinWithOutTSAndBinary)
 
             val testMaxWithAllTypes = sql("SELECT max(StringCol), max(BooleanCol), " +
@@ -388,44 +485,59 @@ trait FileSourceAggregatePushDownSuite
             // In addition, Parquet Binary min/max could be truncated, so we disable aggregate
             // push down for Parquet Binary (could be Spark StringType, BinaryType or DecimalType).
             // Also do not push down for ORC with same reason.
-            checkPushedInfo(testMaxWithAllTypes, "PushedAggregation: []")
+            testMaxWithAllTypes.queryExecution.optimizedPlan.collect {
+              case _: DataSourceV2ScanRelation =>
+                val expected_plan_fragment =
+                  "PushedAggregation: []"
+                checkKeywordsExistsInExplain(testMaxWithAllTypes, expected_plan_fragment)
+            }
+
             checkAnswer(testMaxWithAllTypes, expectedMaxWithAllTypes)
 
             val testMaxWithoutTSAndBinary = sql("SELECT max(BooleanCol), max(ByteCol), " +
               "max(ShortCol), max(IntegerCol), max(LongCol), max(FloatCol), " +
               "max(DoubleCol), max(DateCol) FROM test")
 
-            expected_plan_fragment =
-              "PushedAggregation: [MAX(BooleanCol), " +
-                "MAX(ByteCol), " +
-                "MAX(ShortCol), " +
-                "MAX(IntegerCol), " +
-                "MAX(LongCol), " +
-                "MAX(FloatCol), " +
-                "MAX(DoubleCol), " +
-                "MAX(DateCol)]"
-            checkPushedInfo(testMaxWithoutTSAndBinary, expected_plan_fragment)
+            testMaxWithoutTSAndBinary.queryExecution.optimizedPlan.collect {
+              case _: DataSourceV2ScanRelation =>
+                val expected_plan_fragment =
+                  "PushedAggregation: [MAX(BooleanCol), " +
+                    "MAX(ByteCol), " +
+                    "MAX(ShortCol), " +
+                    "MAX(IntegerCol), " +
+                    "MAX(LongCol), " +
+                    "MAX(FloatCol), " +
+                    "MAX(DoubleCol), " +
+                    "MAX(DateCol)]"
+                checkKeywordsExistsInExplain(testMaxWithoutTSAndBinary, expected_plan_fragment)
+            }
+
             checkAnswer(testMaxWithoutTSAndBinary, expectedMaxWithOutTSAndBinary)
 
             val testCount = sql("SELECT count(StringCol), count(BooleanCol)," +
               " count(ByteCol), count(BinaryCol), count(ShortCol), count(IntegerCol)," +
               " count(LongCol), count(FloatCol), count(DoubleCol)," +
               " count(DecimalCol), count(DateCol), count(TimestampCol) FROM test")
-            expected_plan_fragment =
-              "PushedAggregation: [" +
-                "COUNT(StringCol), " +
-                "COUNT(BooleanCol), " +
-                "COUNT(ByteCol), " +
-                "COUNT(BinaryCol), " +
-                "COUNT(ShortCol), " +
-                "COUNT(IntegerCol), " +
-                "COUNT(LongCol), " +
-                "COUNT(FloatCol), " +
-                "COUNT(DoubleCol), " +
-                "COUNT(DecimalCol), " +
-                "COUNT(DateCol), " +
-                "COUNT(TimestampCol)]"
-            checkPushedInfo(testCount, expected_plan_fragment)
+
+            testCount.queryExecution.optimizedPlan.collect {
+              case _: DataSourceV2ScanRelation =>
+                val expected_plan_fragment =
+                  "PushedAggregation: [" +
+                    "COUNT(StringCol), " +
+                    "COUNT(BooleanCol), " +
+                    "COUNT(ByteCol), " +
+                    "COUNT(BinaryCol), " +
+                    "COUNT(ShortCol), " +
+                    "COUNT(IntegerCol), " +
+                    "COUNT(LongCol), " +
+                    "COUNT(FloatCol), " +
+                    "COUNT(DoubleCol), " +
+                    "COUNT(DecimalCol), " +
+                    "COUNT(DateCol), " +
+                    "COUNT(TimestampCol)]"
+                checkKeywordsExistsInExplain(testCount, expected_plan_fragment)
+            }
+
             checkAnswer(testCount, expectedCount)
           }
         }
@@ -518,19 +630,16 @@ trait FileSourceAggregatePushDownSuite
           withTempView("tmp") {
             spark.read.format(format).load(dir.getCanonicalPath).createOrReplaceTempView("tmp")
             val selectAgg = sql("SELECT max(iD), min(Id) FROM tmp")
-            checkPushedInfo(selectAgg,
-              "PushedAggregation: [MAX(id), MIN(id)]")
+            selectAgg.queryExecution.optimizedPlan.collect {
+              case _: DataSourceV2ScanRelation =>
+                val expected_plan_fragment =
+                  "PushedAggregation: [MAX(id), MIN(id)]"
+                checkKeywordsExistsInExplain(selectAgg, expected_plan_fragment)
+            }
             checkAnswer(selectAgg, Seq(Row(9, 0)))
           }
         }
       }
-    }
-  }
-
-  private def checkPushedInfo(df: DataFrame, expectedPlanFragment: String): Unit = {
-    df.queryExecution.optimizedPlan.collect {
-      case _: DataSourceV2ScanRelation =>
-        checkKeywordsExistsInExplain(df, expectedPlanFragment)
     }
   }
 }

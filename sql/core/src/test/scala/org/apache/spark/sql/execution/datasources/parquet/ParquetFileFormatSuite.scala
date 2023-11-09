@@ -61,14 +61,10 @@ abstract class ParquetFileFormatSuite
     }
 
     testReadFooters(true)
-    checkError(
-      exception = intercept[SparkException] {
-        testReadFooters(false)
-      }.getCause.asInstanceOf[SparkException],
-      errorClass = "CANNOT_READ_FILE_FOOTER",
-      parameters = Map("file" -> "file:.*"),
-      matchPVals = true
-    )
+    val exception = intercept[SparkException] {
+      testReadFooters(false)
+    }.getCause
+    assert(exception.getMessage().contains("Could not read footer for file"))
   }
 
   test("SPARK-36825, SPARK-36854: year-month/day-time intervals written and read as INT32/INT64") {
@@ -101,7 +97,7 @@ abstract class ParquetFileFormatSuite
         Seq(
           Seq(StructField("f1", IntegerType), StructField("f2", BooleanType)) -> true,
           Seq(StructField("f1", IntegerType), StructField("f2", ArrayType(IntegerType))) -> enabled,
-          Seq(StructField("f1", BooleanType), StructField("f2", testUDT)) -> enabled
+          Seq(StructField("f1", BooleanType), StructField("f2", testUDT)) -> false
         ).foreach { case (schema, expected) =>
           assert(ParquetUtils.isBatchReadSupportedForSchema(conf, StructType(schema)) == expected)
         }
@@ -120,10 +116,10 @@ abstract class ParquetFileFormatSuite
           StructType(Seq(StructField("f1", DecimalType.SYSTEM_DEFAULT),
             StructField("f2", StringType))) -> enabled,
           MapType(keyType = LongType, valueType = DateType) -> enabled,
-          testUDT -> enabled,
-          ArrayType(testUDT) -> enabled,
-          StructType(Seq(StructField("f1", ByteType), StructField("f2", testUDT))) -> enabled,
-          MapType(keyType = testUDT, valueType = BinaryType) -> enabled
+          testUDT -> false,
+          ArrayType(testUDT) -> false,
+          StructType(Seq(StructField("f1", ByteType), StructField("f2", testUDT))) -> false,
+          MapType(keyType = testUDT, valueType = BinaryType) -> false
         ).foreach { case (dt, expected) =>
           assert(ParquetUtils.isBatchReadSupported(conf, dt) == expected)
         }

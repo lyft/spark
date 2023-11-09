@@ -51,7 +51,7 @@ from pyspark.sql.types import (
     NullType,
     TimestampType,
 )
-from pyspark.errors import PythonException
+from pyspark.sql.utils import PythonException
 from pyspark.testing.sqlutils import (
     ReusedSQLTestCase,
     have_pandas,
@@ -73,7 +73,7 @@ if have_pyarrow:
     not have_pandas or not have_pyarrow,
     cast(str, pandas_requirement_message or pyarrow_requirement_message),
 )
-class GroupedApplyInPandasTestsMixin:
+class GroupedMapInPandasTests(ReusedSQLTestCase):
     @property
     def data(self):
         return (
@@ -708,7 +708,7 @@ class GroupedApplyInPandasTestsMixin:
             window_range = key[1]
 
             # Make sure the key with group and window values are correct
-            for _, i in pdf.id.items():
+            for _, i in pdf.id.iteritems():
                 assert expected_key[i][0] == group, "{} != {}".format(expected_key[i][0], group)
                 assert expected_key[i][1] == window_range, "{} != {}".format(
                     expected_key[i][1], window_range
@@ -740,15 +740,11 @@ class GroupedApplyInPandasTestsMixin:
         self.assertEqual(row.asDict(), Row(column=1, score=0.5).asDict())
 
 
-class GroupedApplyInPandasTests(GroupedApplyInPandasTestsMixin, ReusedSQLTestCase):
-    pass
-
-
 if __name__ == "__main__":
-    from pyspark.sql.tests.pandas.test_pandas_grouped_map import *  # noqa: F401
+    from pyspark.sql.tests.test_pandas_grouped_map import *  # noqa: F401
 
     try:
-        import xmlrunner
+        import xmlrunner  # type: ignore[import]
 
         testRunner = xmlrunner.XMLTestRunner(output="target/test-reports", verbosity=2)
     except ImportError:

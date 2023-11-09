@@ -28,6 +28,6 @@ VectorLike = Union[ndarray, Vector, List[float], Tuple[float, ...]]
 C = TypeVar("C", bound=type)
 JavaObjectOrPickleDump = Union[JavaObject, bytearray, bytes]
 
-CorrMethodType = Union[Literal["spearman"], Literal["pearson"]]
-KolmogorovSmirnovTestDistNameType = Literal["norm"]
+CorrelationMethod = Union[Literal["spearman"], Literal["pearson"]]
+DistName = Literal["norm"]
 NormType = Union[None, float, Literal["fro"], Literal["nuc"]]

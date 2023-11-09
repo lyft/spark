@@ -20,6 +20,7 @@ package org.apache.spark.sql.jdbc
 import java.sql.Types
 import java.util.Locale
 
+import org.apache.spark.sql.connector.expressions.aggregate.{AggregateFunc, GeneralAggregateFunc}
 import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.types._
 
@@ -30,12 +31,25 @@ private object DerbyDialect extends JdbcDialect {
     url.toLowerCase(Locale.ROOT).startsWith("jdbc:derby")
 
   // See https://db.apache.org/derby/docs/10.15/ref/index.html
-  private val supportedAggregateFunctions = Set("MAX", "MIN", "SUM", "COUNT", "AVG",
-    "VAR_POP", "VAR_SAMP", "STDDEV_POP", "STDDEV_SAMP")
-  private val supportedFunctions = supportedAggregateFunctions
-
-  override def isSupportedFunction(funcName: String): Boolean =
-    supportedFunctions.contains(funcName)
+  override def compileAggregate(aggFunction: AggregateFunc): Option[String] = {
+    super.compileAggregate(aggFunction).orElse(
+      aggFunction match {
+        case f: GeneralAggregateFunc if f.name() == "VAR_POP" && f.isDistinct == false =>
+          assert(f.children().length == 1)
+          Some(s"VAR_POP(${f.children().head})")
+        case f: GeneralAggregateFunc if f.name() == "VAR_SAMP" && f.isDistinct == false =>
+          assert(f.children().length == 1)
+          Some(s"VAR_SAMP(${f.children().head})")
+        case f: GeneralAggregateFunc if f.name() == "STDDEV_POP" && f.isDistinct == false =>
+          assert(f.children().length == 1)
+          Some(s"STDDEV_POP(${f.children().head})")
+        case f: GeneralAggregateFunc if f.name() == "STDDEV_SAMP" && f.isDistinct == false =>
+          assert(f.children().length == 1)
+          Some(s"STDDEV_SAMP(${f.children().head})")
+        case _ => None
+      }
+    )
+  }
 
   override def getCatalystType(
       sqlType: Int, typeName: String, size: Int, md: MetadataBuilder): Option[DataType] = {
@@ -64,19 +78,6 @@ private object DerbyDialect extends JdbcDialect {
   // https://issues.apache.org/jira/browse/DERBY-7008
   override def getTableCommentQuery(table: String, comment: String): String = {
     throw QueryExecutionErrors.commentOnTableUnsupportedError()
-  }
-
-  // Derby Support 2 types of clauses for nullability constraint alteration
-  //   columnName { SET | DROP } NOT NULL
-  //   columnName [ NOT ] NULL
-  // Here we use the 2nd one
-  // For more information, https://db.apache.org/derby/docs/10.16/ref/rrefsqlj81859.html
-  override def getUpdateColumnNullabilityQuery(
-      tableName: String,
-      columnName: String,
-      isNullable: Boolean): String = {
-    val nullable = if (isNullable) "NULL" else "NOT NULL"
-    s"ALTER TABLE $tableName ALTER COLUMN ${quoteIdentifier(columnName)} $nullable"
   }
 
   override def getLimitClause(limit: Integer): String = {

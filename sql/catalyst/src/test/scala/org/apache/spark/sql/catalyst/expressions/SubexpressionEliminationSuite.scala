@@ -17,11 +17,10 @@
 package org.apache.spark.sql.catalyst.expressions
 
 import org.apache.spark.{SparkFunSuite, TaskContext, TaskContextImpl}
-import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.codegen._
 import org.apache.spark.sql.catalyst.plans.logical.LocalRelation
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{BinaryType, DataType, IntegerType, ObjectType}
+import org.apache.spark.sql.types.{BinaryType, DataType, Decimal, IntegerType}
 
 class SubexpressionEliminationSuite extends SparkFunSuite with ExpressionEvalHelper {
   test("Semantic equals and hash") {
@@ -342,7 +341,7 @@ class SubexpressionEliminationSuite extends SparkFunSuite with ExpressionEvalHel
 
   test("SPARK-36073: Transparently canonicalized expressions are not necessary subexpressions") {
     val add = Add(Literal(1), Literal(2))
-    val transparent = ProxyExpression(add)
+    val transparent = PromotePrecision(add)
 
     val equivalence = new EquivalentExpressions
     equivalence.addExprTree(transparent)
@@ -424,7 +423,7 @@ class SubexpressionEliminationSuite extends SparkFunSuite with ExpressionEvalHel
   test("SPARK-38333: PlanExpression expression should skip addExprTree function in Executor") {
     try {
       // suppose we are in executor
-      val context1 = new TaskContextImpl(0, 0, 0, 0, 0, 1, null, null, null, cpus = 0)
+      val context1 = new TaskContextImpl(0, 0, 0, 0, 0, null, null, null, cpus = 0)
       TaskContext.setTaskContext(context1)
 
       val equivalence = new EquivalentExpressions
@@ -434,6 +433,19 @@ class SubexpressionEliminationSuite extends SparkFunSuite with ExpressionEvalHel
     } finally {
       TaskContext.unset()
     }
+  }
+
+  test("SPARK-35886: PromotePrecision should not overwrite genCode") {
+    val p = PromotePrecision(Literal(Decimal("10.1")))
+
+    val ctx = new CodegenContext()
+    val subExprs = ctx.subexpressionEliminationForWholeStageCodegen(Seq(p, p))
+    val code = ctx.withSubExprEliminationExprs(subExprs.states) {
+      Seq(p.genCode(ctx))
+    }.head
+    // Decimal `Literal` will add the value by `addReferenceObj`.
+    // So if `p` is replaced by subexpression, the literal will be reused.
+    assert(code.value.toString == "((Decimal) references[0] /* literal */)")
   }
 
   test("SPARK-39040: Respect NaNvl in EquivalentExpressions for expression elimination") {
@@ -449,37 +461,11 @@ class SubexpressionEliminationSuite extends SparkFunSuite with ExpressionEvalHel
     assert(e2.getCommonSubexpressions.size == 1)
     assert(e2.getCommonSubexpressions.head == add)
   }
-
-  test("SPARK-42851: Handle supportExpression consistently across add and get") {
-    val expr = {
-      val function = (lambda: Expression) => Add(lambda, Literal(1))
-      val elementType = IntegerType
-      val colClass = classOf[Array[Int]]
-      val inputType = ObjectType(colClass)
-      val inputObject = BoundReference(0, inputType, nullable = true)
-      objects.MapObjects(function, inputObject, elementType, true, Option(colClass))
-    }
-    val equivalence = new EquivalentExpressions
-    equivalence.addExpr(expr)
-    val hasMatching = equivalence.addExpr(expr)
-    val cseState = equivalence.getExprState(expr)
-    assert(hasMatching == cseState.isDefined)
-  }
 }
 
 case class CodegenFallbackExpression(child: Expression)
   extends UnaryExpression with CodegenFallback {
   override def dataType: DataType = child.dataType
   override protected def withNewChildInternal(newChild: Expression): CodegenFallbackExpression =
-    copy(child = newChild)
-}
-
-case class ProxyExpression(child: Expression) extends UnaryExpression {
-  override lazy val canonicalized: Expression = child.canonicalized
-  override def dataType: DataType = child.dataType
-  override def eval(input: InternalRow): Any = child.eval(input)
-  override protected def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode =
-    child.genCode(ctx)
-  override protected def withNewChildInternal(newChild: Expression): Expression =
     copy(child = newChild)
 }

@@ -21,8 +21,6 @@ import java.io.ByteArrayInputStream
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
-import org.apache.spark.sql.catalyst.analysis.TypeCheckResult.DataTypeMismatch
-import org.apache.spark.sql.catalyst.expressions.Cast.{toSQLExpr, toSQLId, toSQLType}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, CodeGenerator, ExprCode, JavaCode, TrueLiteral}
 import org.apache.spark.sql.catalyst.expressions.codegen.Block.BlockHelper
 import org.apache.spark.sql.catalyst.trees.TreePattern.OUTER_REFERENCE
@@ -42,12 +40,13 @@ import org.apache.spark.util.sketch.BloomFilter
  */
 case class BloomFilterMightContain(
     bloomFilterExpression: Expression,
-    valueExpression: Expression) extends BinaryExpression with Predicate {
+    valueExpression: Expression) extends BinaryExpression {
 
   override def nullable: Boolean = true
   override def left: Expression = bloomFilterExpression
   override def right: Expression = valueExpression
   override def prettyName: String = "might_contain"
+  override def dataType: DataType = BooleanType
 
   override def checkInputDataTypes(): TypeCheckResult = {
     (left.dataType, right.dataType) match {
@@ -61,24 +60,12 @@ case class BloomFilterMightContain(
             if !subquery.containsPattern(OUTER_REFERENCE) =>
             TypeCheckResult.TypeCheckSuccess
           case _ =>
-            DataTypeMismatch(
-              errorSubClass = "BLOOM_FILTER_BINARY_OP_WRONG_TYPE",
-              messageParameters = Map(
-                "functionName" -> toSQLId(prettyName),
-                "actual" -> toSQLExpr(bloomFilterExpression)
-              )
-            )
+            TypeCheckResult.TypeCheckFailure(s"The Bloom filter binary input to $prettyName " +
+              "should be either a constant value or a scalar subquery expression")
         }
-      case _ =>
-        DataTypeMismatch(
-          errorSubClass = "BLOOM_FILTER_WRONG_TYPE",
-          messageParameters = Map(
-            "functionName" -> toSQLId(prettyName),
-            "expectedLeft" -> toSQLType(BinaryType),
-            "expectedRight" -> toSQLType(LongType),
-            "actual" -> Seq(left.dataType, right.dataType).map(toSQLType).mkString(", ")
-          )
-        )
+      case _ => TypeCheckResult.TypeCheckFailure(s"Input to function $prettyName should have " +
+        s"been ${BinaryType.simpleString} followed by a value with ${LongType.simpleString}, " +
+        s"but it's [${left.dataType.catalogString}, ${right.dataType.catalogString}].")
     }
   }
 

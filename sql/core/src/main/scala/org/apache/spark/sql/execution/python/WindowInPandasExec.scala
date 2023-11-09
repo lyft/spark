@@ -29,7 +29,6 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.execution.{ExternalAppendOnlyUnsafeRowArray, SparkPlan}
-import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.window._
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.util.ArrowUtils
@@ -85,10 +84,7 @@ case class WindowInPandasExec(
     partitionSpec: Seq[Expression],
     orderSpec: Seq[SortOrder],
     child: SparkPlan)
-  extends WindowExecBase with PythonSQLMetrics {
-  override lazy val metrics: Map[String, SQLMetric] = pythonMetrics ++ Map(
-    "spillSize" -> SQLMetrics.createSizeMetric(sparkContext, "spill size")
-  )
+  extends WindowExecBase {
 
   /**
    * Helper functions and data structures for window bounds
@@ -249,7 +245,6 @@ case class WindowInPandasExec(
 
     val allInputs = windowBoundsInput ++ dataInputs
     val allInputTypes = allInputs.map(_.dataType)
-    val spillSize = longMetric("spillSize")
 
     // Start processing.
     child.execute().mapPartitions { iter =>
@@ -342,7 +337,6 @@ case class WindowInPandasExec(
           if (!found) {
             // clear final partition
             buffer.clear()
-            spillSize += buffer.spillSize
           }
           found
         }
@@ -381,8 +375,7 @@ case class WindowInPandasExec(
         argOffsets,
         pythonInputSchema,
         sessionLocalTimeZone,
-        pythonRunnerConf,
-        pythonMetrics).compute(pythonInput, context.partitionId(), context)
+        pythonRunnerConf).compute(pythonInput, context.partitionId(), context)
 
       val joined = new JoinedRow
 

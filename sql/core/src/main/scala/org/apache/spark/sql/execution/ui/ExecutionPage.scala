@@ -84,14 +84,15 @@ class ExecutionPage(parent: SQLTab) extends WebUIPage("execution") with Logging 
 
       val metrics = sqlStore.executionMetrics(executionId)
       val graph = sqlStore.planGraph(executionId)
-      val configs = Option(executionUIData.modifiedConfigs).getOrElse(Map.empty)
 
       summary ++
         planVisualization(request, metrics, graph) ++
         physicalPlanDescription(executionUIData.physicalPlanDescription) ++
-        modifiedConfigs(configs.filterKeys(!_.startsWith(pandasOnSparkConfPrefix)).toMap) ++
+        modifiedConfigs(
+          executionUIData.modifiedConfigs.filterKeys(
+            !_.startsWith(pandasOnSparkConfPrefix)).toMap) ++
         modifiedPandasOnSparkConfigs(
-          configs.filterKeys(_.startsWith(pandasOnSparkConfPrefix)).toMap)
+          executionUIData.modifiedConfigs.filterKeys(_.startsWith(pandasOnSparkConfPrefix)).toMap)
     }.getOrElse {
       <div>No information to display for query {executionId}</div>
     }

@@ -733,7 +733,7 @@ object IntervalUtils {
    * @throws ArithmeticException if the result overflows any field value or divided by zero
    */
   def divideExact(interval: CalendarInterval, num: Double): CalendarInterval = {
-    if (num == 0) throw QueryExecutionErrors.intervalDividedByZeroError(null)
+    if (num == 0) throw QueryExecutionErrors.divideByZeroError("")
     fromDoubles(interval.months / num, interval.days / num, interval.microseconds / num)
   }
 
@@ -1256,45 +1256,25 @@ object IntervalUtils {
     intervalString
   }
 
-  def intToYearMonthInterval(v: Int, startField: Byte, endField: Byte): Int = {
+  def intToYearMonthInterval(v: Int, endField: Byte): Int = {
     endField match {
       case YEAR =>
         try {
           Math.multiplyExact(v, MONTHS_PER_YEAR)
         } catch {
           case _: ArithmeticException =>
-            throw QueryExecutionErrors.castingCauseOverflowError(
-              v,
-              IntegerType,
-              YearMonthIntervalType(startField, endField))
+            throw QueryExecutionErrors.castingCauseOverflowError(v, IntegerType, YM(endField))
         }
       case MONTH => v
     }
   }
 
-  def longToYearMonthInterval(v: Long, startField: Byte, endField: Byte): Int = {
+  def longToYearMonthInterval(v: Long, endField: Byte): Int = {
     val vInt = v.toInt
     if (v != vInt) {
-      throw QueryExecutionErrors.castingCauseOverflowError(
-        v,
-        LongType,
-        YearMonthIntervalType(startField, endField))
+      throw QueryExecutionErrors.castingCauseOverflowError(v, LongType, YM(endField))
     }
-    intToYearMonthInterval(vInt, startField, endField)
-  }
-
-  def decimalToYearMonthInterval(
-      d: Decimal, p: Int, s: Int, startField: Byte, endField: Byte): Int = {
-    try {
-      val months = if (endField == YEAR) d.toBigDecimal * MONTHS_PER_YEAR else d.toBigDecimal
-      months.setScale(0, BigDecimal.RoundingMode.HALF_UP).toIntExact
-    } catch {
-      case _: ArithmeticException =>
-        throw QueryExecutionErrors.castingCauseOverflowError(
-          d,
-          DecimalType(p, s),
-          YearMonthIntervalType(startField, endField))
-    }
+    intToYearMonthInterval(vInt, endField)
   }
 
   def yearMonthIntervalToInt(v: Int, startField: Byte, endField: Byte): Int = {
@@ -1328,17 +1308,14 @@ object IntervalUtils {
     vByte
   }
 
-  def intToDayTimeInterval(v: Int, startField: Byte, endField: Byte): Long = {
+  def intToDayTimeInterval(v: Int, endField: Byte): Long = {
     endField match {
       case DAY =>
         try {
           Math.multiplyExact(v, MICROS_PER_DAY)
         } catch {
           case _: ArithmeticException =>
-            throw QueryExecutionErrors.castingCauseOverflowError(
-              v,
-              IntegerType,
-              DayTimeIntervalType(startField, endField))
+            throw QueryExecutionErrors.castingCauseOverflowError(v, IntegerType, DT(endField))
         }
       case HOUR => v * MICROS_PER_HOUR
       case MINUTE => v * MICROS_PER_MINUTE
@@ -1346,7 +1323,7 @@ object IntervalUtils {
     }
   }
 
-  def longToDayTimeInterval(v: Long, startField: Byte, endField: Byte): Long = {
+  def longToDayTimeInterval(v: Long, endField: Byte): Long = {
     try {
       endField match {
         case DAY => Math.multiplyExact(v, MICROS_PER_DAY)
@@ -1356,10 +1333,7 @@ object IntervalUtils {
       }
     } catch {
       case _: ArithmeticException =>
-        throw QueryExecutionErrors.castingCauseOverflowError(
-          v,
-          LongType,
-          DayTimeIntervalType(startField, endField))
+        throw QueryExecutionErrors.castingCauseOverflowError(v, LongType, DT(endField))
     }
   }
 
@@ -1369,32 +1343,6 @@ object IntervalUtils {
       case HOUR => v / MICROS_PER_HOUR
       case MINUTE => v / MICROS_PER_MINUTE
       case SECOND => v / MICROS_PER_SECOND
-    }
-  }
-
-  def dayTimeIntervalToDecimal(v: Long, endField: Byte): Decimal = {
-    endField match {
-      case DAY => Decimal(v / MICROS_PER_DAY)
-      case HOUR => Decimal(v / MICROS_PER_HOUR)
-      case MINUTE => Decimal(v / MICROS_PER_MINUTE)
-      case SECOND => Decimal(v, Decimal.MAX_LONG_DIGITS, 6)
-    }
-  }
-
-  def decimalToDayTimeInterval(
-      d: Decimal, p: Int, s: Int, startField: Byte, endField: Byte): Long = {
-    try {
-      val micros = endField match {
-        case DAY => d.toBigDecimal * MICROS_PER_DAY
-        case HOUR => d.toBigDecimal * MICROS_PER_HOUR
-        case MINUTE => d.toBigDecimal * MICROS_PER_MINUTE
-        case SECOND => d.toBigDecimal * MICROS_PER_SECOND
-      }
-      micros.setScale(0, BigDecimal.RoundingMode.HALF_UP).toLongExact
-    } catch {
-      case _: ArithmeticException =>
-        throw QueryExecutionErrors.castingCauseOverflowError(
-          d, DecimalType(p, s), DT(startField, endField))
     }
   }
 

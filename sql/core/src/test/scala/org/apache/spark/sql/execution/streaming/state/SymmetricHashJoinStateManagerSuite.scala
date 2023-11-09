@@ -27,7 +27,6 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BoundReference, Expression, GenericInternalRow, LessThanOrEqual, Literal, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.catalyst.expressions.codegen.GeneratePredicate
 import org.apache.spark.sql.catalyst.plans.logical.EventTimeWatermark
-import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.streaming.StatefulOperatorStateInfo
 import org.apache.spark.sql.execution.streaming.StreamingSymmetricHashJoinHelper.LeftSide
 import org.apache.spark.sql.internal.SQLConf
@@ -203,27 +202,16 @@ class SymmetricHashJoinStateManagerSuite extends StreamTest with BeforeAndAfter 
 
     // Test with skipNullsForStreamStreamJoins set to true which would skip nulls
     // and continue iterating as part of removeByValue as well as get
-    val metric = new SQLMetric("sum")
-    withJoinStateManager(inputValueAttribs, joinKeyExprs, stateFormatVersion, true,
-        Some(metric)) { manager =>
+    withJoinStateManager(inputValueAttribs, joinKeyExprs, stateFormatVersion, true) { manager =>
       implicit val mgr = manager
 
       appendAndTest(40, 50, 200, 300)
       assert(numRows === 3)
       updateNumValues(40, 4) // create a null at the end
-      assert(getNumValues(40) === 3)
-      assert(metric.value == 1)
-
       append(40, 400)
-      assert(getNumValues(40) === 4)
-      assert(metric.value == 2)
-
       updateNumValues(40, 7) // create nulls in between and end
-      assert(getNumValues(40) === 4)
-      assert(metric.value == 5)
 
       removeByValue(50)
-
       assert(getNumValues(40) === 3)       // we should now get (400, 200, 300) with nulls skipped
 
       removeByValue(300)
@@ -309,8 +297,7 @@ class SymmetricHashJoinStateManagerSuite extends StreamTest with BeforeAndAfter 
       inputValueAttribs: Seq[Attribute],
       joinKeyExprs: Seq[Expression],
       stateFormatVersion: Int,
-      skipNullsForStreamStreamJoins: Boolean = false,
-      metric: Option[SQLMetric] = None)
+      skipNullsForStreamStreamJoins: Boolean = false)
       (f: SymmetricHashJoinStateManager => Unit): Unit = {
 
     withTempDir { file =>
@@ -320,7 +307,7 @@ class SymmetricHashJoinStateManagerSuite extends StreamTest with BeforeAndAfter 
         val stateInfo = StatefulOperatorStateInfo(file.getAbsolutePath, UUID.randomUUID, 0, 0, 5)
         val manager = new SymmetricHashJoinStateManager(
           LeftSide, inputValueAttribs, joinKeyExprs, Some(stateInfo), storeConf, new Configuration,
-          partitionId = 0, stateFormatVersion, metric)
+          partitionId = 0, stateFormatVersion)
         try {
           f(manager)
         } finally {

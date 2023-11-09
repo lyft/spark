@@ -19,7 +19,6 @@ package org.apache.spark.sql.connector.expressions.aggregate;
 
 import org.apache.spark.annotation.Evolving;
 import org.apache.spark.sql.connector.expressions.Expression;
-import org.apache.spark.sql.internal.connector.ExpressionWithToString;
 
 /**
  * An aggregate function that returns the summation of all the values in a group.
@@ -27,7 +26,7 @@ import org.apache.spark.sql.internal.connector.ExpressionWithToString;
  * @since 3.2.0
  */
 @Evolving
-public final class Sum extends ExpressionWithToString implements AggregateFunc {
+public final class Sum implements AggregateFunc {
   private final Expression input;
   private final boolean isDistinct;
 
@@ -41,4 +40,13 @@ public final class Sum extends ExpressionWithToString implements AggregateFunc {
 
   @Override
   public Expression[] children() { return new Expression[]{ input }; }
+
+  @Override
+  public String toString() {
+    if (isDistinct) {
+      return "SUM(DISTINCT " + input.describe() + ")";
+    } else {
+      return "SUM(" + input.describe() + ")";
+    }
+  }
 }

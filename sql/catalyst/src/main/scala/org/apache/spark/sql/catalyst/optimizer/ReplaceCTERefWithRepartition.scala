@@ -41,12 +41,6 @@ object ReplaceCTERefWithRepartition extends Rule[LogicalPlan] {
       replaceWithRepartition(plan, mutable.HashMap.empty[Long, LogicalPlan])
   }
 
-  private def canSkipExtraRepartition(p: LogicalPlan): Boolean = p match {
-    case _: RepartitionOperation => true
-    case _: RebalancePartitions => true
-    case _ => false
-  }
-
   private def replaceWithRepartition(
       plan: LogicalPlan,
       cteMap: mutable.HashMap[Long, LogicalPlan]): LogicalPlan = plan match {
@@ -54,12 +48,12 @@ object ReplaceCTERefWithRepartition extends Rule[LogicalPlan] {
       cteDefs.foreach { cteDef =>
         val inlined = replaceWithRepartition(cteDef.child, cteMap)
         val withRepartition =
-          if (canSkipExtraRepartition(inlined) || cteDef.underSubquery) {
+          if (inlined.isInstanceOf[RepartitionOperation] || cteDef.underSubquery) {
             // If the CTE definition plan itself is a repartition operation or if it hosts a merged
             // scalar subquery, we do not need to add an extra repartition shuffle.
             inlined
           } else {
-            RepartitionByExpression(Seq.empty, inlined, None)
+            Repartition(conf.numShufflePartitions, shuffle = true, inlined)
           }
         cteMap.put(cteDef.id, withRepartition)
       }

@@ -189,9 +189,7 @@ class HiveClientSuite(version: String, allVersions: Seq[String])
       client.dropDatabase("temporary", ignoreIfNotExists = false, cascade = false)
       assert(false, "dropDatabase should throw HiveException")
     }
-    checkError(ex,
-      errorClass = "SCHEMA_NOT_EMPTY",
-      parameters = Map("schemaName" -> "`temporary`"))
+    assert(ex.message.contains("Cannot drop a non-empty database: temporary."))
 
     client.dropDatabase("temporary", ignoreIfNotExists = false, cascade = true)
     assert(!client.databaseExists("temporary"))
@@ -527,13 +525,10 @@ class HiveClientSuite(version: String, allVersions: Seq[String])
       storageFormat))
     try {
       client.createPartitions("default", "src_part", partitions, ignoreIfExists = false)
-      val e = intercept[PartitionsAlreadyExistException] {
+      val errMsg = intercept[PartitionsAlreadyExistException] {
         client.createPartitions("default", "src_part", partitions, ignoreIfExists = false)
-      }
-      checkError(e,
-        errorClass = "PARTITIONS_ALREADY_EXIST",
-        parameters = Map("partitionList" -> "PARTITION (`key1` = 101, `key2` = 102)",
-          "tableName" -> "`default`.`src_part`"))
+      }.getMessage
+      assert(errMsg.contains("partitions already exists"))
     } finally {
       client.dropPartitions(
         "default",
@@ -900,7 +895,7 @@ class HiveClientSuite(version: String, allVersions: Seq[String])
   test("Decimal support of Avro Hive serde") {
     val tableName = "tab1"
     // TODO: add the other logical types. For details, see the link:
-    // https://avro.apache.org/docs/1.11.1/specification/#logical-types
+    // https://avro.apache.org/docs/1.11.0/spec.html#Logical+Types
     val avroSchema =
     """{
       |  "name": "test_record",

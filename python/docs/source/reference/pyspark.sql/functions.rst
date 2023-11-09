@@ -28,7 +28,10 @@ Normal Functions
 
     col
     column
+    create_map
     lit
+    array
+    map_from_arrays
     broadcast
     coalesce
     input_file_name
@@ -39,6 +42,7 @@ Normal Functions
     rand
     randn
     spark_partition_id
+    struct
     when
     bitwise_not
     bitwiseNOT
@@ -80,7 +84,6 @@ Math Functions
     log10
     log1p
     log2
-    pmod
     pow
     rint
     round
@@ -122,7 +125,6 @@ Datetime Functions
     quarter
     month
     last_day
-    localtimestamp
     minute
     months_between
     next_day
@@ -138,7 +140,6 @@ Datetime Functions
     window
     session_window
     timestamp_seconds
-    window_time
 
 
 Collection Functions
@@ -146,24 +147,19 @@ Collection Functions
 .. autosummary::
     :toctree: api/
 
-    array
     array_contains
     arrays_overlap
-    array_join
-    create_map
     slice
+    array_join
     concat
     array_position
     element_at
-    array_append
     array_sort
-    array_insert
     array_remove
     array_distinct
     array_intersect
     array_union
     array_except
-    array_compact
     transform
     exists
     forall
@@ -173,22 +169,17 @@ Collection Functions
     transform_keys
     transform_values
     map_filter
-    map_from_arrays
     map_zip_with
     explode
     explode_outer
     posexplode
     posexplode_outer
-    inline
-    inline_outer
-    get
     get_json_object
     json_tuple
     from_json
     schema_of_json
     to_json
     size
-    struct
     sort_array
     array_max
     array_min
@@ -197,7 +188,6 @@ Collection Functions
     flatten
     sequence
     array_repeat
-    map_contains_key
     map_keys
     map_values
     map_entries
@@ -245,10 +235,8 @@ Aggregate Functions
     max
     max_by
     mean
-    median
     min
     min_by
-    mode
     percentile_approx
     product
     skewness
@@ -336,10 +324,8 @@ UDF
 .. autosummary::
     :toctree: api/
 
-    call_udf
     pandas_udf
     udf
-    unwrap_udt
 
 Misc Functions
 --------------

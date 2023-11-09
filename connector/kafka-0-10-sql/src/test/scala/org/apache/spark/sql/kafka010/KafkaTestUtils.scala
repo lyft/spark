@@ -18,7 +18,7 @@
 package org.apache.spark.sql.kafka010
 
 import java.io.{File, IOException}
-import java.net.InetSocketAddress
+import java.net.{InetAddress, InetSocketAddress}
 import java.nio.charset.StandardCharsets
 import java.util.{Collections, Properties, UUID}
 import java.util.concurrent.TimeUnit
@@ -44,7 +44,6 @@ import org.apache.kafka.common.network.ListenerName
 import org.apache.kafka.common.security.auth.SecurityProtocol.{PLAINTEXT, SASL_PLAINTEXT}
 import org.apache.kafka.common.serialization.StringSerializer
 import org.apache.kafka.common.utils.SystemTime
-import org.apache.zookeeper.client.ZKClientConfig
 import org.apache.zookeeper.server.{NIOServerCnxnFactory, ZooKeeperServer}
 import org.apache.zookeeper.server.auth.SASLAuthenticationProvider
 import org.scalatest.Assertions._
@@ -68,18 +67,13 @@ class KafkaTestUtils(
 
   private val JAVA_AUTH_CONFIG = "java.security.auth.login.config"
 
-  private val localHostNameForURI = Utils.localHostNameForURI()
-  logInfo(s"Local host name is $localHostNameForURI")
-
-  // MiniKDC uses canonical host name on host part, hence we need to provide canonical host name
-  // on the 'host' part of the principal.
-  private val localCanonicalHostName = Utils.localCanonicalHostName()
-  logInfo(s"Local canonical host name is $localCanonicalHostName")
+  private val localCanonicalHostName = InetAddress.getLoopbackAddress().getCanonicalHostName()
+  logInfo(s"Local host name is $localCanonicalHostName")
 
   private var kdc: MiniKdc = _
 
   // Zookeeper related configurations
-  private val zkHost = localHostNameForURI
+  private val zkHost = localCanonicalHostName
   private var zkPort: Int = 0
   private val zkConnectionTimeout = 60000
   private val zkSessionTimeout = 10000
@@ -88,7 +82,7 @@ class KafkaTestUtils(
   private var zkClient: KafkaZkClient = _
 
   // Kafka broker related configurations
-  private val brokerHost = localHostNameForURI
+  private val brokerHost = localCanonicalHostName
   private var brokerPort = 0
   private var brokerConf: KafkaConfig = _
 
@@ -272,7 +266,7 @@ class KafkaTestUtils(
     // Get the actual zookeeper binding port
     zkPort = zookeeper.actualPort
     zkClient = KafkaZkClient(s"$zkHost:$zkPort", isSecure = false, zkSessionTimeout,
-      zkConnectionTimeout, 1, new SystemTime(), "test", new ZKClientConfig)
+      zkConnectionTimeout, 1, new SystemTime())
     zkReady = true
   }
 
@@ -494,7 +488,9 @@ class KafkaTestUtils(
   protected def brokerConfiguration: Properties = {
     val props = new Properties()
     props.put("broker.id", "0")
-    props.put("listeners", s"PLAINTEXT://$localHostNameForURI:$brokerPort")
+    props.put("host.name", "127.0.0.1")
+    props.put("advertised.host.name", "127.0.0.1")
+    props.put("port", brokerPort.toString)
     props.put("log.dir", Utils.createTempDir().getAbsolutePath)
     props.put("zookeeper.connect", zkAddress)
     props.put("zookeeper.connection.timeout.ms", "60000")
@@ -510,8 +506,8 @@ class KafkaTestUtils(
     props.put("transaction.state.log.min.isr", "1")
 
     if (secure) {
-      props.put("listeners", s"SASL_PLAINTEXT://$localHostNameForURI:0")
-      props.put("advertised.listeners", s"SASL_PLAINTEXT://$localHostNameForURI:0")
+      props.put("listeners", "SASL_PLAINTEXT://127.0.0.1:0")
+      props.put("advertised.listeners", "SASL_PLAINTEXT://127.0.0.1:0")
       props.put("inter.broker.listener.name", "SASL_PLAINTEXT")
       props.put("delegation.token.master.key", UUID.randomUUID().toString)
       props.put("sasl.enabled.mechanisms", "GSSAPI,SCRAM-SHA-512")
@@ -537,8 +533,6 @@ class KafkaTestUtils(
     props.put("key.serializer", classOf[StringSerializer].getName)
     // wait for all in-sync replicas to ack sends
     props.put("acks", "all")
-    props.put("partitioner.class",
-      classOf[org.apache.kafka.clients.producer.internals.DefaultPartitioner].getName)
     setAuthenticationConfigIfNeeded(props)
     props
   }
@@ -655,8 +649,7 @@ class KafkaTestUtils(
     val zookeeper = new ZooKeeperServer(snapshotDir, logDir, 500)
     val (ip, port) = {
       val splits = zkConnect.split(":")
-      val port = splits(splits.length - 1)
-      (zkConnect.substring(0, zkConnect.length - port.length - 1), port.toInt)
+      (splits(0), splits(1).toInt)
     }
     val factory = new NIOServerCnxnFactory()
     factory.configure(new InetSocketAddress(ip, port), 16)

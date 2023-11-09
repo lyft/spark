@@ -22,14 +22,13 @@ import java.util
 import java.util.Locale
 
 import scala.collection.mutable.ArrayBuilder
-import scala.util.control.NonFatal
 
 import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.SQLConfHelper
 import org.apache.spark.sql.catalyst.analysis.{IndexAlreadyExistsException, NoSuchIndexException}
-import org.apache.spark.sql.connector.catalog.Identifier
 import org.apache.spark.sql.connector.catalog.index.TableIndex
-import org.apache.spark.sql.connector.expressions.{Expression, FieldReference, NamedReference}
+import org.apache.spark.sql.connector.expressions.{FieldReference, NamedReference}
+import org.apache.spark.sql.connector.expressions.aggregate.{AggregateFunc, GeneralAggregateFunc}
 import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.execution.datasources.jdbc.{JDBCOptions, JdbcUtils}
 import org.apache.spark.sql.types.{BooleanType, DataType, FloatType, LongType, MetadataBuilder}
@@ -39,37 +38,25 @@ private case object MySQLDialect extends JdbcDialect with SQLConfHelper {
   override def canHandle(url : String): Boolean =
     url.toLowerCase(Locale.ROOT).startsWith("jdbc:mysql")
 
-  private val distinctUnsupportedAggregateFunctions =
-    Set("VAR_POP", "VAR_SAMP", "STDDEV_POP", "STDDEV_SAMP")
-
   // See https://dev.mysql.com/doc/refman/8.0/en/aggregate-functions.html
-  private val supportedAggregateFunctions =
-    Set("MAX", "MIN", "SUM", "COUNT", "AVG") ++ distinctUnsupportedAggregateFunctions
-  private val supportedFunctions = supportedAggregateFunctions
-
-  override def isSupportedFunction(funcName: String): Boolean =
-    supportedFunctions.contains(funcName)
-
-  class MySQLSQLBuilder extends JDBCSQLBuilder {
-    override def visitAggregateFunction(
-        funcName: String, isDistinct: Boolean, inputs: Array[String]): String =
-      if (isDistinct && distinctUnsupportedAggregateFunctions.contains(funcName)) {
-        throw new UnsupportedOperationException(s"${this.getClass.getSimpleName} does not " +
-          s"support aggregate function: $funcName with DISTINCT");
-      } else {
-        super.visitAggregateFunction(funcName, isDistinct, inputs)
+  override def compileAggregate(aggFunction: AggregateFunc): Option[String] = {
+    super.compileAggregate(aggFunction).orElse(
+      aggFunction match {
+        case f: GeneralAggregateFunc if f.name() == "VAR_POP" && f.isDistinct == false =>
+          assert(f.children().length == 1)
+          Some(s"VAR_POP(${f.children().head})")
+        case f: GeneralAggregateFunc if f.name() == "VAR_SAMP" && f.isDistinct == false =>
+          assert(f.children().length == 1)
+          Some(s"VAR_SAMP(${f.children().head})")
+        case f: GeneralAggregateFunc if f.name() == "STDDEV_POP" && f.isDistinct == false =>
+          assert(f.children().length == 1)
+          Some(s"STDDEV_POP(${f.children().head})")
+        case f: GeneralAggregateFunc if f.name() == "STDDEV_SAMP" && f.isDistinct == false =>
+          assert(f.children().length == 1)
+          Some(s"STDDEV_SAMP(${f.children().head})")
+        case _ => None
       }
-  }
-
-  override def compileExpression(expr: Expression): Option[String] = {
-    val mysqlSQLBuilder = new MySQLSQLBuilder()
-    try {
-      Some(mysqlSQLBuilder.build(expr))
-    } catch {
-      case NonFatal(e) =>
-        logWarning("Error occurs while compiling V2 expression", e)
-        None
-    }
+    )
   }
 
   override def getCatalystType(
@@ -177,7 +164,7 @@ private case object MySQLDialect extends JdbcDialect with SQLConfHelper {
   // https://dev.mysql.com/doc/refman/8.0/en/create-index.html
   override def createIndex(
       indexName: String,
-      tableIdent: Identifier,
+      tableName: String,
       columns: Array[NamedReference],
       columnsProperties: util.Map[NamedReference, util.Map[String, String]],
       properties: util.Map[String, String]): String = {
@@ -186,7 +173,7 @@ private case object MySQLDialect extends JdbcDialect with SQLConfHelper {
 
     // columnsProperties doesn't apply to MySQL so it is ignored
     s"CREATE INDEX ${quoteIdentifier(indexName)} $indexType ON" +
-      s" ${quoteIdentifier(tableIdent.name())} (${columnList.mkString(", ")})" +
+      s" ${quoteIdentifier(tableName)} (${columnList.mkString(", ")})" +
       s" ${indexPropertyList.mkString(" ")}"
   }
 
@@ -195,24 +182,23 @@ private case object MySQLDialect extends JdbcDialect with SQLConfHelper {
   override def indexExists(
       conn: Connection,
       indexName: String,
-      tableIdent: Identifier,
+      tableName: String,
       options: JDBCOptions): Boolean = {
-    val sql = s"SHOW INDEXES FROM ${quoteIdentifier(tableIdent.name())} " +
-      s"WHERE key_name = '$indexName'"
+    val sql = s"SHOW INDEXES FROM ${quoteIdentifier(tableName)} WHERE key_name = '$indexName'"
     JdbcUtils.checkIfIndexExists(conn, sql, options)
   }
 
-  override def dropIndex(indexName: String, tableIdent: Identifier): String = {
-    s"DROP INDEX ${quoteIdentifier(indexName)} ON ${tableIdent.name()}"
+  override def dropIndex(indexName: String, tableName: String): String = {
+    s"DROP INDEX ${quoteIdentifier(indexName)} ON $tableName"
   }
 
   // SHOW INDEX syntax
   // https://dev.mysql.com/doc/refman/8.0/en/show-index.html
   override def listIndexes(
       conn: Connection,
-      tableIdent: Identifier,
+      tableName: String,
       options: JDBCOptions): Array[TableIndex] = {
-    val sql = s"SHOW INDEXES FROM ${tableIdent.name()}"
+    val sql = s"SHOW INDEXES FROM $tableName"
     var indexMap: Map[String, TableIndex] = Map()
     try {
       JdbcUtils.executeQuery(conn, options, sql) { rs =>
@@ -220,7 +206,7 @@ private case object MySQLDialect extends JdbcDialect with SQLConfHelper {
           val indexName = rs.getString("key_name")
           val colName = rs.getString("column_name")
           val indexType = rs.getString("index_type")
-          val indexComment = rs.getString("index_comment")
+          val indexComment = rs.getString("Index_comment")
           if (indexMap.contains(indexName)) {
             val index = indexMap.get(indexName).get
             val newIndex = new TableIndex(indexName, indexType,
@@ -251,18 +237,9 @@ private case object MySQLDialect extends JdbcDialect with SQLConfHelper {
         sqlException.getErrorCode match {
           // ER_DUP_KEYNAME
           case 1061 =>
-            // The message is: Failed to create index indexName in tableName
-            val regex = "(?s)Failed to create index (.*) in (.*)".r
-            val indexName = regex.findFirstMatchIn(message).get.group(1)
-            val tableName = regex.findFirstMatchIn(message).get.group(2)
-            throw new IndexAlreadyExistsException(
-              indexName = indexName, tableName = tableName, cause = Some(e))
+            throw new IndexAlreadyExistsException(message, cause = Some(e))
           case 1091 =>
-            // The message is: Failed to drop index indexName in tableName
-            val regex = "(?s)Failed to drop index (.*) in (.*)".r
-            val indexName = regex.findFirstMatchIn(message).get.group(1)
-            val tableName = regex.findFirstMatchIn(message).get.group(2)
-            throw new NoSuchIndexException(indexName, tableName, cause = Some(e))
+            throw new NoSuchIndexException(message, cause = Some(e))
           case _ => super.classifyException(message, e)
         }
       case unsupported: UnsupportedOperationException => throw unsupported

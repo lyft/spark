@@ -24,10 +24,8 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult._
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.expressions.Cast.{toSQLExpr, toSQLId, toSQLType, toSQLValue}
 import org.apache.spark.sql.catalyst.trees.TernaryLike
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.internal.SQLConf.{RUNTIME_BLOOM_FILTER_MAX_NUM_BITS, RUNTIME_BLOOM_FILTER_MAX_NUM_ITEMS}
 import org.apache.spark.sql.types._
 import org.apache.spark.util.sketch.BloomFilter
 
@@ -57,13 +55,6 @@ case class BloomFilterAggregate(
       Multiply(estimatedNumItemsExpression, Literal(8L)))
   }
 
-  def this(child: Expression, estimatedNumItems: Long) = {
-    this(child, Literal(estimatedNumItems),
-      Literal(BloomFilter.optimalNumOfBits(estimatedNumItems,
-        SQLConf.get.getConf(RUNTIME_BLOOM_FILTER_MAX_NUM_ITEMS),
-        SQLConf.get.getConf(RUNTIME_BLOOM_FILTER_MAX_NUM_BITS))))
-  }
-
   def this(child: Expression) = {
     this(child, Literal(SQLConf.get.getConf(SQLConf.RUNTIME_BLOOM_FILTER_EXPECTED_NUM_ITEMS)),
       Literal(SQLConf.get.getConf(SQLConf.RUNTIME_BLOOM_FILTER_NUM_BITS)))
@@ -72,66 +63,28 @@ case class BloomFilterAggregate(
   override def checkInputDataTypes(): TypeCheckResult = {
     (first.dataType, second.dataType, third.dataType) match {
       case (_, NullType, _) | (_, _, NullType) =>
-        DataTypeMismatch(
-          errorSubClass = "UNEXPECTED_NULL",
-          messageParameters = Map(
-            "exprName" -> "estimatedNumItems or numBits"
-          )
-        )
+        TypeCheckResult.TypeCheckFailure("Null typed values cannot be used as size arguments")
       case (LongType, LongType, LongType) =>
         if (!estimatedNumItemsExpression.foldable) {
-          DataTypeMismatch(
-            errorSubClass = "NON_FOLDABLE_INPUT",
-            messageParameters = Map(
-              "inputName" -> "estimatedNumItems",
-              "inputType" -> toSQLType(estimatedNumItemsExpression.dataType),
-              "inputExpr" -> toSQLExpr(estimatedNumItemsExpression)
-            )
-          )
+          TypeCheckFailure("The estimated number of items provided must be a constant literal")
         } else if (estimatedNumItems <= 0L) {
-          DataTypeMismatch(
-            errorSubClass = "VALUE_OUT_OF_RANGE",
-            messageParameters = Map(
-              "exprName" -> "estimatedNumItems",
-              "valueRange" -> s"[0, positive]",
-              "currentValue" -> toSQLValue(estimatedNumItems, LongType)
-            )
-          )
+          TypeCheckFailure("The estimated number of items must be a positive value " +
+            s" (current value = $estimatedNumItems)")
         } else if (!numBitsExpression.foldable) {
-          DataTypeMismatch(
-            errorSubClass = "NON_FOLDABLE_INPUT",
-            messageParameters = Map(
-              "inputName" -> "numBitsExpression",
-              "inputType" -> toSQLType(numBitsExpression.dataType),
-              "inputExpr" -> toSQLExpr(numBitsExpression)
-            )
-          )
+          TypeCheckFailure("The number of bits provided must be a constant literal")
         } else if (numBits <= 0L) {
-          DataTypeMismatch(
-            errorSubClass = "VALUE_OUT_OF_RANGE",
-            messageParameters = Map(
-              "exprName" -> "numBits",
-              "valueRange" -> s"[0, positive]",
-              "currentValue" -> toSQLValue(numBits, LongType)
-            )
-          )
+          TypeCheckFailure("The number of bits must be a positive value " +
+            s" (current value = $numBits)")
         } else {
           require(estimatedNumItems <=
-            SQLConf.get.getConf(RUNTIME_BLOOM_FILTER_MAX_NUM_ITEMS))
-          require(numBits <= SQLConf.get.getConf(RUNTIME_BLOOM_FILTER_MAX_NUM_BITS))
+            SQLConf.get.getConf(SQLConf.RUNTIME_BLOOM_FILTER_MAX_NUM_ITEMS))
+          require(numBits <= SQLConf.get.getConf(SQLConf.RUNTIME_BLOOM_FILTER_MAX_NUM_BITS))
           TypeCheckSuccess
         }
-      case _ =>
-        DataTypeMismatch(
-          errorSubClass = "BLOOM_FILTER_WRONG_TYPE",
-          messageParameters = Map(
-            "functionName" -> toSQLId(prettyName),
-            "expectedLeft" -> toSQLType(BinaryType),
-            "expectedRight" -> toSQLType(LongType),
-            "actual" -> Seq(first.dataType, second.dataType, third.dataType)
-              .map(toSQLType).mkString(", ")
-          )
-        )
+      case _ => TypeCheckResult.TypeCheckFailure(s"Input to function $prettyName should have " +
+        s"been a ${LongType.simpleString} value followed with two ${LongType.simpleString} size " +
+        s"arguments, but it's [${first.dataType.catalogString}, " +
+        s"${second.dataType.catalogString}, ${third.dataType.catalogString}]")
     }
   }
   override def nullable: Boolean = true
@@ -143,12 +96,12 @@ case class BloomFilterAggregate(
   // Mark as lazy so that `estimatedNumItems` is not evaluated during tree transformation.
   private lazy val estimatedNumItems: Long =
     Math.min(estimatedNumItemsExpression.eval().asInstanceOf[Number].longValue,
-      SQLConf.get.getConf(RUNTIME_BLOOM_FILTER_MAX_NUM_ITEMS))
+      SQLConf.get.getConf(SQLConf.RUNTIME_BLOOM_FILTER_MAX_NUM_ITEMS))
 
   // Mark as lazy so that `numBits` is not evaluated during tree transformation.
   private lazy val numBits: Long =
     Math.min(numBitsExpression.eval().asInstanceOf[Number].longValue,
-      SQLConf.get.getConf(RUNTIME_BLOOM_FILTER_MAX_NUM_BITS))
+      SQLConf.get.getConf(SQLConf.RUNTIME_BLOOM_FILTER_MAX_NUM_BITS))
 
   override def first: Expression = child
 

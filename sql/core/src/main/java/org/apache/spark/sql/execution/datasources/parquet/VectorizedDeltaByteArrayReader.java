@@ -107,7 +107,6 @@ public class VectorizedDeltaByteArrayReader extends VectorizedReaderBase
    * read corrupted files written with this bug, when reading a new page we need to recover the
    * previous page's last value to use it (if needed) to read the first value.
    */
-  @Override
   public void setPreviousReader(ValuesReader reader) {
     if (reader != null) {
       this.previous = ((VectorizedDeltaByteArrayReader) reader).previous;

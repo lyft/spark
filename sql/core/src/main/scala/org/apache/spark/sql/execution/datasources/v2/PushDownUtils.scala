@@ -19,18 +19,17 @@ package org.apache.spark.sql.execution.datasources.v2
 
 import scala.collection.mutable
 
-import org.apache.spark.sql.catalyst.expressions.{AttributeReference, AttributeSet, Expression, NamedExpression, SchemaPruning}
+import org.apache.spark.sql.catalyst.expressions.{AttributeReference, AttributeSet, Expression, NamedExpression, PredicateHelper, SchemaPruning}
 import org.apache.spark.sql.catalyst.util.CharVarcharUtils
 import org.apache.spark.sql.connector.expressions.SortOrder
 import org.apache.spark.sql.connector.expressions.filter.Predicate
-import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownFilters, SupportsPushDownLimit, SupportsPushDownOffset, SupportsPushDownRequiredColumns, SupportsPushDownTableSample, SupportsPushDownTopN, SupportsPushDownV2Filters}
+import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownFilters, SupportsPushDownLimit, SupportsPushDownRequiredColumns, SupportsPushDownTableSample, SupportsPushDownTopN, SupportsPushDownV2Filters}
 import org.apache.spark.sql.execution.datasources.DataSourceStrategy
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.sources
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.util.collection.Utils
 
-object PushDownUtils {
+object PushDownUtils extends PredicateHelper {
   /**
    * Pushes down filters to the data source reader
    *
@@ -66,10 +65,7 @@ object PushDownUtils {
         val postScanFilters = r.pushFilters(translatedFilters.toArray).map { filter =>
           DataSourceStrategy.rebuildExpressionFromFilter(filter, translatedFilterToExpr)
         }
-        // Normally translated filters (postScanFilters) are simple filters that can be evaluated
-        // faster, while the untranslated filters are complicated filters that take more time to
-        // evaluate, so we want to evaluate the postScanFilters filters first.
-        (Left(r.pushedFilters()), (postScanFilters ++ untranslatableExprs).toSeq)
+        (Left(r.pushedFilters()), (untranslatableExprs ++ postScanFilters).toSeq)
 
       case r: SupportsPushDownV2Filters =>
         // A map from translated data source leaf node filters to original catalyst filter
@@ -98,10 +94,7 @@ object PushDownUtils {
         val postScanFilters = r.pushPredicates(translatedFilters.toArray).map { predicate =>
           DataSourceV2Strategy.rebuildExpressionFromFilter(predicate, translatedFilterToExpr)
         }
-        // Normally translated filters (postScanFilters) are simple filters that can be evaluated
-        // faster, while the untranslated filters are complicated filters that take more time to
-        // evaluate, so we want to evaluate the postScanFilters filters first.
-        (Right(r.pushedPredicates), (postScanFilters ++ untranslatableExprs).toSeq)
+        (Right(r.pushedPredicates), (untranslatableExprs ++ postScanFilters).toSeq)
 
       case f: FileScanBuilder =>
         val postScanFilters = f.pushFilters(filters)
@@ -129,23 +122,10 @@ object PushDownUtils {
    *         the second Boolean value represents whether to push down partially, which means
    *         Spark will keep the Limit and do it again.
    */
-  def pushLimit(scanBuilder: ScanBuilder, limit: Int): (Boolean, Boolean) = {
+  def pushLimit(scanBuilder: ScanBuilder, limit: Int): Boolean = {
     scanBuilder match {
-      case s: SupportsPushDownLimit if s.pushLimit(limit) =>
-        (true, s.isPartiallyPushed)
-      case _ => (false, false)
-    }
-  }
-
-  /**
-   * Pushes down OFFSET to the data source Scan.
-   *
-   * @return the Boolean value represents whether to push down.
-   */
-  def pushOffset(scanBuilder: ScanBuilder, offset: Int): Boolean = {
-    scanBuilder match {
-      case s: SupportsPushDownOffset =>
-        s.pushOffset(offset)
+      case s: SupportsPushDownLimit =>
+        s.pushLimit(limit)
       case _ => false
     }
   }
@@ -210,7 +190,7 @@ object PushDownUtils {
   def toOutputAttrs(
       schema: StructType,
       relation: DataSourceV2Relation): Seq[AttributeReference] = {
-    val nameToAttr = Utils.toMap(relation.output.map(_.name), relation.output)
+    val nameToAttr = relation.output.map(_.name).zip(relation.output).toMap
     val cleaned = CharVarcharUtils.replaceCharVarcharWithStringInSchema(schema)
     cleaned.toAttributes.map {
       // we have to keep the attribute id during transformation

@@ -27,6 +27,7 @@ import org.apache.spark.sql.{DataFrame, Row, SaveMode, SparkSession, SQLContext}
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.util.{DateFormatter, DateTimeUtils, TimestampFormatter}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils.{getZoneId, stringToDate, stringToTimestamp}
+import org.apache.spark.sql.connector.expressions.SortOrder
 import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.errors.QueryCompilationErrors
 import org.apache.spark.sql.execution.datasources.v2.TableSampleInfo
@@ -304,8 +305,7 @@ private[sql] case class JDBCRelation(
       groupByColumns: Option[Array[String]],
       tableSample: Option[TableSampleInfo],
       limit: Int,
-      sortOrders: Array[String],
-      offset: Int): RDD[Row] = {
+      sortOrders: Array[SortOrder]): RDD[Row] = {
     // Rely on a type erasure hack to pass RDD[InternalRow] back as RDD[Row]
     JDBCRDD.scanTable(
       sparkSession.sparkContext,
@@ -318,8 +318,7 @@ private[sql] case class JDBCRelation(
       groupByColumns,
       tableSample,
       limit,
-      sortOrders,
-      offset).asInstanceOf[RDD[Row]]
+      sortOrders).asInstanceOf[RDD[Row]]
   }
 
   override def insert(data: DataFrame, overwrite: Boolean): Unit = {
@@ -331,6 +330,6 @@ private[sql] case class JDBCRelation(
   override def toString: String = {
     val partitioningInfo = if (parts.nonEmpty) s" [numPartitions=${parts.length}]" else ""
     // credentials should not be included in the plan output, table information is sufficient.
-    s"JDBCRelation(${jdbcOptions.prepareQuery}${jdbcOptions.tableOrQuery})$partitioningInfo"
+    s"JDBCRelation(${jdbcOptions.tableOrQuery})" + partitioningInfo
   }
 }

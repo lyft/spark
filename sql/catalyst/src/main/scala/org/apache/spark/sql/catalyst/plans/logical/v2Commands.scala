@@ -17,35 +17,24 @@
 
 package org.apache.spark.sql.catalyst.plans.logical
 
-import org.apache.spark.sql.AnalysisException
-import org.apache.spark.sql.catalyst.analysis.{AnalysisContext, EliminateSubqueryAliases, FieldName, NamedRelation, PartitionSpec, ResolvedIdentifier, UnresolvedException}
+import org.apache.spark.sql.{sources, AnalysisException}
+import org.apache.spark.sql.catalyst.analysis.{AnalysisContext, EliminateSubqueryAliases, FieldName, NamedRelation, PartitionSpec, ResolvedDBObjectName, UnresolvedException}
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.catalog.FunctionResource
-import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, AttributeSet, Expression, MetadataAttribute, NamedExpression, Unevaluable, V2ExpressionUtils}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, AttributeSet, Expression, MetadataAttribute, Unevaluable}
 import org.apache.spark.sql.catalyst.plans.DescribeCommandSchema
 import org.apache.spark.sql.catalyst.trees.BinaryLike
-import org.apache.spark.sql.catalyst.util.{CharVarcharUtils, RowDeltaUtils, WriteDeltaProjections}
+import org.apache.spark.sql.catalyst.util.CharVarcharUtils
 import org.apache.spark.sql.connector.catalog._
 import org.apache.spark.sql.connector.expressions.Transform
-import org.apache.spark.sql.connector.expressions.filter.Predicate
-import org.apache.spark.sql.connector.write.{DeltaWrite, RowLevelOperation, RowLevelOperationTable, SupportsDelta, Write}
+import org.apache.spark.sql.connector.write.{RowLevelOperation, RowLevelOperationTable, Write}
 import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Relation
-import org.apache.spark.sql.types.{BooleanType, DataType, IntegerType, MetadataBuilder, StringType, StructField, StructType}
-
-// For v2 DML commands, it may end up with the v1 fallback code path and need to build a DataFrame
-// which is required by the DS v1 API. We need to keep the analyzed input query plan to build
-// that DataFrame, instead of the optimized query plan, as building DataFrame optimizes the
-// query plan again. This trait defines a `storeAnalyzedQuery` function which will be called at
-// the end of analysis, and implementations should copy the input query plan into a non-child
-// field so that it won't be transformed by the optimizer.
-trait KeepAnalyzedQuery extends Command {
-  def storeAnalyzedQuery(): Command
-}
+import org.apache.spark.sql.types.{BooleanType, DataType, MetadataBuilder, StringType, StructType}
 
 /**
  * Base trait for DataSourceV2 write commands
  */
-trait V2WriteCommand extends UnaryCommand with KeepAnalyzedQuery {
+trait V2WriteCommand extends UnaryCommand {
   def table: NamedRelation
   def query: LogicalPlan
   def isByName: Boolean
@@ -87,11 +76,9 @@ case class AppendData(
     query: LogicalPlan,
     writeOptions: Map[String, String],
     isByName: Boolean,
-    write: Option[Write] = None,
-    analyzedQuery: Option[LogicalPlan] = None) extends V2WriteCommand {
+    write: Option[Write] = None) extends V2WriteCommand {
   override def withNewQuery(newQuery: LogicalPlan): AppendData = copy(query = newQuery)
   override def withNewTable(newTable: NamedRelation): AppendData = copy(table = newTable)
-  override def storeAnalyzedQuery(): Command = copy(analyzedQuery = Some(query))
   override protected def withNewChildInternal(newChild: LogicalPlan): AppendData =
     copy(query = newChild)
 }
@@ -121,8 +108,7 @@ case class OverwriteByExpression(
     query: LogicalPlan,
     writeOptions: Map[String, String],
     isByName: Boolean,
-    write: Option[Write] = None,
-    analyzedQuery: Option[LogicalPlan] = None) extends V2WriteCommand {
+    write: Option[Write] = None) extends V2WriteCommand {
   override lazy val resolved: Boolean = {
     table.resolved && query.resolved && outputResolved && deleteExpr.resolved
   }
@@ -134,7 +120,6 @@ case class OverwriteByExpression(
     copy(table = newTable)
   }
 
-  override def storeAnalyzedQuery(): Command = copy(analyzedQuery = Some(query))
   override protected def withNewChildInternal(newChild: LogicalPlan): OverwriteByExpression =
     copy(query = newChild)
 }
@@ -172,9 +157,6 @@ case class OverwritePartitionsDynamic(
   override def withNewTable(newTable: NamedRelation): OverwritePartitionsDynamic = {
     copy(table = newTable)
   }
-
-  // OverwritePartitionsDynamic has no v1 fallback
-  override def storeAnalyzedQuery(): Command = this
 
   override protected def withNewChildInternal(newChild: LogicalPlan): OverwritePartitionsDynamic =
     copy(query = newChild)
@@ -266,125 +248,7 @@ case class ReplaceData(
 
   override def withNewTable(newTable: NamedRelation): ReplaceData = copy(table = newTable)
 
-  // ReplaceData has no v1 fallback
-  override def storeAnalyzedQuery(): Command = this
-
   override protected def withNewChildInternal(newChild: LogicalPlan): ReplaceData = {
-    copy(query = newChild)
-  }
-}
-
-/**
- * Writes a delta of rows to an existing table during a row-level operation.
- *
- * This node references a query that translates a logical DELETE, UPDATE, MERGE operation into
- * a set of row-level changes to be encoded in the table. Each row in the query represents either
- * a delete, update or insert and stores the operation type in a special column.
- *
- * This node is constructed in rules that rewrite DELETE, UPDATE, MERGE operations for data sources
- * that can handle deltas of rows.
- *
- * @param table a plan that references a row-level operation table
- * @param condition a condition that defines matching records
- * @param query a query with a delta of records that should written
- * @param originalTable a plan for the original table for which the row-level command was triggered
- * @param projections projections for row ID, row, metadata attributes
- * @param write a logical write, if already constructed
- */
-case class WriteDelta(
-    table: NamedRelation,
-    condition: Expression,
-    query: LogicalPlan,
-    originalTable: NamedRelation,
-    projections: WriteDeltaProjections,
-    write: Option[DeltaWrite] = None) extends RowLevelWrite {
-
-  override val isByName: Boolean = false
-  override val stringArgs: Iterator[Any] = Iterator(table, query, write)
-
-  override lazy val references: AttributeSet = query.outputSet
-
-  lazy val operation: SupportsDelta = {
-    EliminateSubqueryAliases(table) match {
-      case DataSourceV2Relation(RowLevelOperationTable(_, operation), _, _, _, _) =>
-        operation.asInstanceOf[SupportsDelta]
-      case _ =>
-        throw new AnalysisException(s"Cannot retrieve row-level operation from $table")
-    }
-  }
-
-  override def outputResolved: Boolean = {
-    assert(table.resolved && query.resolved,
-      "`outputResolved` can only be called when `table` and `query` are both resolved.")
-
-    operationResolved && rowAttrsResolved && rowIdAttrsResolved && metadataAttrsResolved
-  }
-
-  private def operationResolved: Boolean = {
-    val attr = query.output.head
-    attr.name == RowDeltaUtils.OPERATION_COLUMN && attr.dataType == IntegerType && !attr.nullable
-  }
-
-  // validates row projection output is compatible with table attributes
-  private def rowAttrsResolved: Boolean = {
-    table.skipSchemaResolution || (projections.rowProjection match {
-      case Some(projection) =>
-        table.output.size == projection.schema.size &&
-          projection.schema.zip(table.output).forall { case (field, outAttr) =>
-            isCompatible(field, outAttr)
-          }
-      case None =>
-        true
-    })
-  }
-
-  // validates row ID projection output is compatible with row ID attributes
-  private def rowIdAttrsResolved: Boolean = {
-    val rowIdAttrs = V2ExpressionUtils.resolveRefs[AttributeReference](
-      operation.rowId,
-      originalTable)
-
-    val projectionSchema = projections.rowIdProjection.schema
-    rowIdAttrs.size == projectionSchema.size && projectionSchema.forall { field =>
-      rowIdAttrs.exists(rowIdAttr => isCompatible(field, rowIdAttr))
-    }
-  }
-
-  // validates metadata projection output is compatible with metadata attributes
-  private def metadataAttrsResolved: Boolean = {
-    projections.metadataProjection match {
-      case Some(projection) =>
-        val metadataAttrs = V2ExpressionUtils.resolveRefs[AttributeReference](
-          operation.requiredMetadataAttributes,
-          originalTable)
-
-        val projectionSchema = projection.schema
-        metadataAttrs.size == projectionSchema.size && projectionSchema.forall { field =>
-          metadataAttrs.exists(metadataAttr => isCompatible(field, metadataAttr))
-        }
-      case None =>
-        true
-    }
-  }
-
-  // checks if a projection field is compatible with a table attribute
-  private def isCompatible(inField: StructField, outAttr: NamedExpression): Boolean = {
-    val inType = CharVarcharUtils.getRawType(inField.metadata).getOrElse(inField.dataType)
-    val outType = CharVarcharUtils.getRawType(outAttr.metadata).getOrElse(outAttr.dataType)
-    // names and types must match, nullability must be compatible
-    inField.name == outAttr.name &&
-      DataType.equalsIgnoreCompatibleNullability(inType, outType) &&
-      (outAttr.nullable || !inField.nullable)
-  }
-
-  override def withNewQuery(newQuery: LogicalPlan): V2WriteCommand = copy(query = newQuery)
-
-  override def withNewTable(newTable: NamedRelation): V2WriteCommand = copy(table = newTable)
-
-  // WriteDelta has no v1 fallback
-  override def storeAnalyzedQuery(): Command = this
-
-  override protected def withNewChildInternal(newChild: LogicalPlan): WriteDelta = {
     copy(query = newChild)
   }
 }
@@ -411,12 +275,13 @@ case class CreateTable(
     partitioning: Seq[Transform],
     tableSpec: TableSpec,
     ignoreIfExists: Boolean) extends UnaryCommand with V2CreateTablePlan {
+  import org.apache.spark.sql.connector.catalog.CatalogV2Implicits.MultipartIdentifierHelper
 
   override def child: LogicalPlan = name
 
   override def tableName: Identifier = {
     assert(child.resolved)
-    child.asInstanceOf[ResolvedIdentifier].identifier
+    child.asInstanceOf[ResolvedDBObjectName].nameParts.asIdentifier
   }
 
   override protected def withNewChildInternal(newChild: LogicalPlan): V2CreateTablePlan =
@@ -436,9 +301,8 @@ case class CreateTableAsSelect(
     query: LogicalPlan,
     tableSpec: TableSpec,
     writeOptions: Map[String, String],
-    ignoreIfExists: Boolean,
-    analyzedQuery: Option[LogicalPlan] = None)
-  extends BinaryCommand with V2CreateTablePlan with KeepAnalyzedQuery {
+    ignoreIfExists: Boolean) extends BinaryCommand with V2CreateTablePlan {
+  import org.apache.spark.sql.connector.catalog.CatalogV2Implicits.MultipartIdentifierHelper
 
   override def tableSchema: StructType = query.schema
   override def left: LogicalPlan = name
@@ -446,7 +310,7 @@ case class CreateTableAsSelect(
 
   override def tableName: Identifier = {
     assert(left.resolved)
-    left.asInstanceOf[ResolvedIdentifier].identifier
+    left.asInstanceOf[ResolvedDBObjectName].nameParts.asIdentifier
   }
 
   override lazy val resolved: Boolean = childrenResolved && {
@@ -459,8 +323,6 @@ case class CreateTableAsSelect(
   override def withPartitioning(rewritten: Seq[Transform]): V2CreateTablePlan = {
     this.copy(partitioning = rewritten)
   }
-
-  override def storeAnalyzedQuery(): Command = copy(analyzedQuery = Some(query))
 
   override protected def withNewChildrenInternal(
     newLeft: LogicalPlan,
@@ -483,12 +345,13 @@ case class ReplaceTable(
     partitioning: Seq[Transform],
     tableSpec: TableSpec,
     orCreate: Boolean) extends UnaryCommand with V2CreateTablePlan {
+  import org.apache.spark.sql.connector.catalog.CatalogV2Implicits.MultipartIdentifierHelper
 
   override def child: LogicalPlan = name
 
   override def tableName: Identifier = {
     assert(child.resolved)
-    child.asInstanceOf[ResolvedIdentifier].identifier
+    child.asInstanceOf[ResolvedDBObjectName].nameParts.asIdentifier
   }
 
   override protected def withNewChildInternal(newChild: LogicalPlan): V2CreateTablePlan =
@@ -511,9 +374,8 @@ case class ReplaceTableAsSelect(
     query: LogicalPlan,
     tableSpec: TableSpec,
     writeOptions: Map[String, String],
-    orCreate: Boolean,
-    analyzedQuery: Option[LogicalPlan] = None)
-  extends BinaryCommand with V2CreateTablePlan with KeepAnalyzedQuery {
+    orCreate: Boolean) extends BinaryCommand with V2CreateTablePlan {
+  import org.apache.spark.sql.connector.catalog.CatalogV2Implicits.MultipartIdentifierHelper
 
   override def tableSchema: StructType = query.schema
   override def left: LogicalPlan = name
@@ -528,10 +390,8 @@ case class ReplaceTableAsSelect(
 
   override def tableName: Identifier = {
     assert(name.resolved)
-    name.asInstanceOf[ResolvedIdentifier].identifier
+    name.asInstanceOf[ResolvedDBObjectName].nameParts.asIdentifier
   }
-
-  override def storeAnalyzedQuery(): Command = copy(analyzedQuery = Some(query))
 
   override protected def withNewChildrenInternal(
       newLeft: LogicalPlan,
@@ -681,7 +541,7 @@ case class DeleteFromTable(
  */
 case class DeleteFromTableWithFilters(
     table: LogicalPlan,
-    condition: Seq[Predicate]) extends LeafCommand
+    condition: Seq[sources.Filter]) extends LeafCommand
 
 /**
  * The logical plan of the UPDATE TABLE command.
@@ -709,8 +569,7 @@ case class MergeIntoTable(
     sourceTable: LogicalPlan,
     mergeCondition: Expression,
     matchedActions: Seq[MergeAction],
-    notMatchedActions: Seq[MergeAction],
-    notMatchedBySourceActions: Seq[MergeAction]) extends BinaryCommand with SupportsSubquery {
+    notMatchedActions: Seq[MergeAction]) extends BinaryCommand with SupportsSubquery {
   def duplicateResolved: Boolean = targetTable.outputSet.intersect(sourceTable.outputSet).isEmpty
 
   def skipSchemaResolution: Boolean = targetTable match {

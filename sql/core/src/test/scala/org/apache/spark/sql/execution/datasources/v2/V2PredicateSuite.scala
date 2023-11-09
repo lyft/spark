@@ -21,7 +21,6 @@ import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.connector.expressions.{Expression, FieldReference, Literal, LiteralValue}
 import org.apache.spark.sql.connector.expressions.filter._
 import org.apache.spark.sql.execution.datasources.v2.V2PredicateSuite.ref
-import org.apache.spark.sql.internal.connector.PredicateUtils
 import org.apache.spark.sql.sources.{AlwaysFalse => V1AlwaysFalse, AlwaysTrue => V1AlwaysTrue, And => V1And, EqualNullSafe, EqualTo, GreaterThan, GreaterThanOrEqual, In, IsNotNull, IsNull, LessThan, LessThanOrEqual, Not => V1Not, Or => V1Or, StringContains, StringEndsWith, StringStartsWith}
 import org.apache.spark.sql.types.{IntegerType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -35,9 +34,6 @@ class V2PredicateSuite extends SparkFunSuite {
     assert(predicate1.describe.equals("a.B = 1"))
     val v1Filter1 = EqualTo(ref("a", "B").describe(), 1)
     assert(v1Filter1.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter1)
-    assert(PredicateUtils.toV1(v1Filter1.toV2).get == v1Filter1)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
 
     val predicate2 =
       new Predicate("=", Array[Expression](ref("a", "b.c"), LiteralValue(1, IntegerType)))
@@ -45,9 +41,6 @@ class V2PredicateSuite extends SparkFunSuite {
     assert(predicate2.describe.equals("a.`b.c` = 1"))
     val v1Filter2 = EqualTo(ref("a", "b.c").describe(), 1)
     assert(v1Filter2.toV2 == predicate2)
-    assert(PredicateUtils.toV1(predicate2).get == v1Filter2)
-    assert(PredicateUtils.toV1(v1Filter2.toV2).get == v1Filter2)
-    assert(PredicateUtils.toV1(predicate2).get.toV2 == predicate2)
 
     val predicate3 =
       new Predicate("=", Array[Expression](ref("`a`.b", "c"), LiteralValue(1, IntegerType)))
@@ -55,9 +48,6 @@ class V2PredicateSuite extends SparkFunSuite {
     assert(predicate3.describe.equals("```a``.b`.c = 1"))
     val v1Filter3 = EqualTo(ref("`a`.b", "c").describe(), 1)
     assert(v1Filter3.toV2 == predicate3)
-    assert(PredicateUtils.toV1(predicate3).get == v1Filter3)
-    assert(PredicateUtils.toV1(v1Filter3.toV2).get == v1Filter3)
-    assert(PredicateUtils.toV1(predicate3).get.toV2 == predicate3)
   }
 
   test("AlwaysTrue") {
@@ -69,9 +59,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = V1AlwaysTrue
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("AlwaysFalse") {
@@ -83,9 +70,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = V1AlwaysFalse
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("EqualTo") {
@@ -97,9 +81,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = EqualTo("a", 1)
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("EqualNullSafe") {
@@ -111,9 +92,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = EqualNullSafe("a", 1)
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("LessThan") {
@@ -125,9 +103,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = LessThan("a", 1)
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("LessThanOrEqual") {
@@ -139,9 +114,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = LessThanOrEqual("a", 1)
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("GreatThan") {
@@ -153,9 +125,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = GreaterThan("a", 1)
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("GreatThanOrEqual") {
@@ -167,9 +136,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = GreaterThanOrEqual("a", 1)
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("In") {
@@ -195,15 +161,9 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter1 = In("a", Array(1, 2, 3, 4))
     assert(v1Filter1.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter1)
-    assert(PredicateUtils.toV1(v1Filter1.toV2).get == v1Filter1)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
 
     val v1Filter2 = In("a", values.map(_.value()))
     assert(v1Filter2.toV2 == predicate3)
-    assert(PredicateUtils.toV1(predicate3).get == v1Filter2)
-    assert(PredicateUtils.toV1(v1Filter2.toV2).get == v1Filter2)
-    assert(PredicateUtils.toV1(predicate3).get.toV2 == predicate3)
   }
 
   test("IsNull") {
@@ -215,9 +175,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = IsNull("a")
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("IsNotNull") {
@@ -229,9 +186,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = IsNotNull("a")
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("Not") {
@@ -245,14 +199,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = V1Not(LessThan("a", 1))
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
-
-    val predicate3 = new Not(
-      new Predicate("=", Array[Expression](LiteralValue(1, IntegerType),
-        LiteralValue(1, IntegerType))))
-    assert(PredicateUtils.toV1(predicate3) == None)
   }
 
   test("And") {
@@ -263,20 +209,11 @@ class V2PredicateSuite extends SparkFunSuite {
       new Predicate("=", Array[Expression](ref("a"), LiteralValue(1, IntegerType))),
       new Predicate("=", Array[Expression](ref("b"), LiteralValue(1, IntegerType))))
     assert(predicate1.equals(predicate2))
-    assert(predicate1.references.map(_.describe()).toSeq.sorted == Seq("a", "b"))
+    assert(predicate1.references.map(_.describe()).toSeq == Seq("a", "b"))
     assert(predicate1.describe.equals("(a = 1) AND (b = 1)"))
 
     val v1Filter = V1And(EqualTo("a", 1), EqualTo("b", 1))
     assert(v1Filter.toV2 == predicate1)
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
-
-    val predicate3 = new And(
-      new Predicate("=", Array[Expression](ref("a"), LiteralValue(1, IntegerType))),
-      new Predicate("=", Array[Expression](LiteralValue(1, IntegerType),
-        LiteralValue(1, IntegerType))))
-    assert(PredicateUtils.toV1(predicate3) == None)
   }
 
   test("Or") {
@@ -287,24 +224,11 @@ class V2PredicateSuite extends SparkFunSuite {
       new Predicate("=", Array[Expression](ref("a"), LiteralValue(1, IntegerType))),
       new Predicate("=", Array[Expression](ref("b"), LiteralValue(1, IntegerType))))
     assert(predicate1.equals(predicate2))
-    assert(predicate1.references.map(_.describe()).toSeq.sorted == Seq("a", "b"))
+    assert(predicate1.references.map(_.describe()).toSeq == Seq("a", "b"))
     assert(predicate1.describe.equals("(a = 1) OR (b = 1)"))
 
     val v1Filter = V1Or(EqualTo("a", 1), EqualTo("b", 1))
     assert(v1Filter.toV2.equals(predicate1))
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
-
-    val left = new Predicate("=", Array[Expression](ref("a"), LiteralValue(1, IntegerType)))
-    val predicate3 = new Or(left,
-      new Predicate("=", Array[Expression](LiteralValue(1, IntegerType))))
-    assert(PredicateUtils.toV1(predicate3) == PredicateUtils.toV1(left))
-
-    val predicate4 = new Or(
-      new Predicate("=", Array[Expression](LiteralValue(1, IntegerType))),
-      new Predicate("=", Array[Expression](LiteralValue(1, IntegerType))))
-    assert(PredicateUtils.toV1(predicate4) == None)
   }
 
   test("StringStartsWith") {
@@ -319,9 +243,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = StringStartsWith("a", "str")
     assert(v1Filter.toV2.equals(predicate1))
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("StringEndsWith") {
@@ -336,9 +257,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = StringEndsWith("a", "str")
     assert(v1Filter.toV2.equals(predicate1))
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 
   test("StringContains") {
@@ -353,9 +271,6 @@ class V2PredicateSuite extends SparkFunSuite {
 
     val v1Filter = StringContains("a", "str")
     assert(v1Filter.toV2.equals(predicate1))
-    assert(PredicateUtils.toV1(predicate1).get == v1Filter)
-    assert(PredicateUtils.toV1(v1Filter.toV2).get == v1Filter)
-    assert(PredicateUtils.toV1(predicate1).get.toV2 == predicate1)
   }
 }
 

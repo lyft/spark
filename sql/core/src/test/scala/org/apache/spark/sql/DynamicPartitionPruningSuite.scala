@@ -22,7 +22,7 @@ import org.scalatest.GivenWhenThen
 import org.apache.spark.sql.catalyst.expressions.{DynamicPruningExpression, Expression}
 import org.apache.spark.sql.catalyst.expressions.CodegenObjectFactoryMode._
 import org.apache.spark.sql.catalyst.plans.ExistenceJoin
-import org.apache.spark.sql.connector.catalog.{InMemoryTableCatalog, InMemoryTableWithV2FilterCatalog}
+import org.apache.spark.sql.connector.catalog.InMemoryTableCatalog
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive._
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
@@ -1556,96 +1556,6 @@ abstract class DynamicPartitionPruningSuiteBase
       checkAnswer(df, Row(4, 1300, "California") :: Row(5, 1000, "Texas") :: Nil)
     }
   }
-
-  test("SPARK-38674: Remove useless deduplicate in SubqueryBroadcastExec") {
-    withTable("duplicate_keys") {
-      withSQLConf(SQLConf.DYNAMIC_PARTITION_PRUNING_ENABLED.key -> "true") {
-        Seq[(Int, String)]((1, "NL"), (1, "NL"), (3, "US"), (3, "US"), (3, "US"))
-          .toDF("store_id", "country")
-          .write
-          .format(tableFormat)
-          .saveAsTable("duplicate_keys")
-
-        val df = sql(
-          """
-            |SELECT date_id, product_id FROM fact_sk f
-            |JOIN duplicate_keys s
-            |ON f.store_id = s.store_id WHERE s.country = 'US' AND date_id > 1050
-          """.stripMargin)
-
-        checkPartitionPruningPredicate(df, withSubquery = false, withBroadcast = true)
-
-        val subqueryBroadcastExecs = collectWithSubqueries(df.queryExecution.executedPlan) {
-          case s: SubqueryBroadcastExec => s
-        }
-        assert(subqueryBroadcastExecs.size === 1)
-        subqueryBroadcastExecs.foreach { subqueryBroadcastExec =>
-          assert(subqueryBroadcastExec.metrics("numOutputRows").value === 1)
-        }
-
-        checkAnswer(df, Row(1060, 2) :: Row(1060, 2) :: Row(1060, 2) :: Nil)
-      }
-    }
-  }
-
-  test("SPARK-39338: Remove dynamic pruning subquery if pruningKey's references is empty") {
-    withSQLConf(SQLConf.DYNAMIC_PARTITION_PRUNING_ENABLED.key -> "true") {
-      val df = sql(
-        """
-          |SELECT f.store_id,
-          |       f.date_id,
-          |       s.state_province
-          |FROM (SELECT   store_id,
-          |               date_id,
-          |               product_id
-          |      FROM   fact_stats
-          |      WHERE  date_id <= 1000
-          |      UNION ALL
-          |      SELECT 4 AS store_id,
-          |               date_id,
-          |               product_id
-          |      FROM   fact_sk
-          |      WHERE  date_id >= 1300) f
-          |JOIN dim_store s
-          |ON f.store_id = s.store_id
-          |WHERE s.country IN ('US', 'NL')
-          |""".stripMargin)
-
-      checkPartitionPruningPredicate(df, withSubquery = false, withBroadcast = true)
-      checkAnswer(df, Row(4, 1300, "California") :: Row(1, 1000, "North-Holland") :: Nil)
-      assert(collectDynamicPruningExpressions(df.queryExecution.executedPlan).size === 1)
-    }
-  }
-
-  test("SPARK-39217: Makes DPP support the pruning side has Union") {
-    withSQLConf(SQLConf.DYNAMIC_PARTITION_PRUNING_ENABLED.key -> "true") {
-      val df = sql(
-        """
-          |SELECT f.store_id,
-          |       f.date_id,
-          |       s.state_province
-          |FROM (SELECT 4 AS store_id,
-          |               date_id,
-          |               product_id
-          |      FROM   fact_sk
-          |      WHERE  date_id >= 1300
-          |      UNION ALL
-          |      SELECT   store_id,
-          |               date_id,
-          |               product_id
-          |      FROM   fact_stats
-          |      WHERE  date_id <= 1000) f
-          |JOIN dim_store s
-          |ON f.store_id = s.store_id
-          |WHERE s.country IN ('US', 'NL')
-          |""".stripMargin)
-
-      checkPartitionPruningPredicate(df, withSubquery = false, withBroadcast = true)
-      checkAnswer(df, Row(4, 1300, "California") :: Row(1, 1000, "North-Holland") :: Nil)
-      // CleanupDynamicPruningFilters should remove DPP in first child of union
-      assert(collectDynamicPruningExpressions(df.queryExecution.executedPlan).size === 1)
-    }
-  }
 }
 
 abstract class DynamicPartitionPruningDataSourceSuiteBase
@@ -1745,7 +1655,7 @@ abstract class DynamicPartitionPruningV1Suite extends DynamicPartitionPruningDat
         val allFilesNum = scan1.metrics("numFiles").value
         val allFilesSize = scan1.metrics("filesSize").value
         assert(scan1.metrics("numPartitions").value === numPartitions)
-        assert(scan1.metrics("pruningTime").value === 0)
+        assert(scan1.metrics("pruningTime").value === -1)
 
         // No dynamic partition pruning, so no static metrics
         // Only files from fid = 5 partition are scanned
@@ -1759,7 +1669,7 @@ abstract class DynamicPartitionPruningV1Suite extends DynamicPartitionPruningDat
         assert(0 < partFilesNum && partFilesNum < allFilesNum)
         assert(0 < partFilesSize && partFilesSize < allFilesSize)
         assert(scan2.metrics("numPartitions").value === 1)
-        assert(scan2.metrics("pruningTime").value === 0)
+        assert(scan2.metrics("pruningTime").value === -1)
 
         // Dynamic partition pruning is used
         // Static metrics are as-if reading the whole fact table
@@ -1834,21 +1744,4 @@ class DynamicPartitionPruningV2SuiteAEOff extends DynamicPartitionPruningV2Suite
   with DisableAdaptiveExecutionSuite
 
 class DynamicPartitionPruningV2SuiteAEOn extends DynamicPartitionPruningV2Suite
-  with EnableAdaptiveExecutionSuite
-
-abstract class DynamicPartitionPruningV2FilterSuite
-    extends DynamicPartitionPruningV2Suite {
-
-  override protected def initState(): Unit = {
-    super.initState()
-    spark.conf.set("spark.sql.catalog.testcat", classOf[InMemoryTableWithV2FilterCatalog].getName)
-  }
-}
-
-class DynamicPartitionPruningV2FilterSuiteAEOff
-    extends DynamicPartitionPruningV2FilterSuite
-  with DisableAdaptiveExecutionSuite
-
-class DynamicPartitionPruningV2FilterSuiteAEOn
-    extends DynamicPartitionPruningV2FilterSuite
   with EnableAdaptiveExecutionSuite

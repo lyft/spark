@@ -21,7 +21,7 @@
   <parent>
     <groupId>org.apache.spark</groupId>
     <artifactId>spark-parent_2.12</artifactId>
-    <version>3.4.1</version>
+    <version>3.3.1</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
 
@@ -148,16 +148,6 @@
         <dependency>
           <groupId>org.apache.spark</groupId>
           <artifactId>spark-mesos_${scala.binary.version}</artifactId>
-          <version>${project.version}</version>
-        </dependency>
-      </dependencies>
-    </profile>
-    <profile>
-      <id>connect</id>
-      <dependencies>
-        <dependency>
-          <groupId>org.apache.spark</groupId>
-          <artifactId>spark-connect_${scala.binary.version}</artifactId>
           <version>${project.version}</version>
         </dependency>
       </dependencies>

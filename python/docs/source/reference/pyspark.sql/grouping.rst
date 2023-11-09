@@ -27,7 +27,6 @@ Grouping
     GroupedData.agg
     GroupedData.apply
     GroupedData.applyInPandas
-    GroupedData.applyInPandasWithState
     GroupedData.avg
     GroupedData.cogroup
     GroupedData.count

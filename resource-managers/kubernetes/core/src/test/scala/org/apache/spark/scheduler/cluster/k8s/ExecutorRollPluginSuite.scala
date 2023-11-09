@@ -18,11 +18,11 @@ package org.apache.spark.scheduler.cluster.k8s
 
 import java.util.Date
 
+import org.junit.Assert.assertEquals
 import org.scalatest.PrivateMethodTester
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.deploy.k8s.Config.ExecutorRollPolicy
-import org.apache.spark.executor.ExecutorMetrics
 import org.apache.spark.status.api.v1.ExecutorSummary
 
 class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
@@ -31,15 +31,12 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
 
   private val _choose = PrivateMethod[Option[String]](Symbol("choose"))
 
-  val metrics = Some(new ExecutorMetrics(
-    Map("JVMHeapMemory" -> 1024L, "JVMOffHeapMemory" -> 1024L)))
-
   val driverSummary = new ExecutorSummary("driver", "host:port", true, 1,
     10, 10, 1, 1, 1,
     0, 0, 1, 100,
     1, 100, 100,
     10, false, 20, new Date(1639300000000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(), metrics, Map(), Map(), 1,
+    Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
     false, Set())
 
   val execWithSmallestID = new ExecutorSummary("1", "host:port", true, 1,
@@ -47,7 +44,7 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
     0, 0, 1, 100,
     20, 100, 100,
     10, false, 20, new Date(1639300001000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(), metrics, Map(), Map(), 1,
+    Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
     false, Set())
 
   // The smallest addTime
@@ -56,7 +53,7 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
     0, 0, 1, 100,
     20, 100, 100,
     10, false, 20, new Date(1639300000000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(), metrics, Map(), Map(), 1,
+    Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
     false, Set())
 
   // The biggest totalGCTime
@@ -65,7 +62,7 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
     0, 0, 1, 100,
     40, 100, 100,
     10, false, 20, new Date(1639300002000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(), metrics, Map(), Map(), 1,
+    Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
     false, Set())
 
   // The biggest totalDuration
@@ -74,7 +71,7 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
     0, 0, 4, 400,
     20, 100, 100,
     10, false, 20, new Date(1639300003000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(), metrics, Map(), Map(), 1,
+    Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
     false, Set())
 
   // The biggest failedTasks
@@ -83,7 +80,7 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
     5, 0, 1, 100,
     20, 100, 100,
     10, false, 20, new Date(1639300003000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(), metrics, Map(), Map(), 1,
+    Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
     false, Set())
 
   // The biggest average duration (= totalDuration / totalTask)
@@ -92,7 +89,7 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
     0, 0, 2, 300,
     20, 100, 100,
     10, false, 20, new Date(1639300003000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(), metrics, Map(), Map(), 1,
+    Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
     false, Set())
 
   // The executor with no tasks
@@ -101,7 +98,7 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
     0, 0, 0, 0,
     0, 0, 0,
     0, false, 0, new Date(1639300001000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(), metrics, Map(), Map(), 1,
+    Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
     false, Set())
 
   // This is used to stabilize 'mean' and 'sd' in OUTLIER test cases.
@@ -110,9 +107,7 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
     4, 0, 2, 280,
     30, 100, 100,
     10, false, 20, new Date(1639300001000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(),
-    Some(new ExecutorMetrics(Map("JVMHeapMemory" -> 1200L, "JVMOffHeapMemory" -> 1200L))),
-    Map(), Map(), 1,
+    Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
     false, Set())
 
   val execWithTwoDigitID = new ExecutorSummary("10", "host:port", true, 1,
@@ -120,48 +115,12 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
     4, 0, 2, 280,
     30, 100, 100,
     10, false, 20, new Date(1639300001000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(), metrics, Map(), Map(), 1,
+    Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
     false, Set())
-
-  val execWithBiggestPeakJVMOnHeapMemory = new ExecutorSummary("11", "host:port", true, 1,
-    10, 10, 1, 1, 1,
-    4, 0, 2, 280,
-    30, 100, 100,
-    10, false, 20, new Date(1639300001000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(),
-    Some(new ExecutorMetrics(Map("JVMHeapMemory" -> 1201L, "JVMOffHeapMemory" -> 1200L))),
-    Map(), Map(), 1, false, Set())
-
-  val execWithBiggestPeakJVMOffHeapMemory = new ExecutorSummary("12", "host:port", true, 1,
-    10, 10, 1, 1, 1,
-    4, 0, 2, 280,
-    30, 100, 100,
-    10, false, 20, new Date(1639300001000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(),
-    Some(new ExecutorMetrics(Map("JVMHeapMemory" -> 1200L, "JVMOffHeapMemory" -> 1201L))),
-    Map(), Map(), 1, false, Set())
-
-  val execWithBiggestDiskUsed = new ExecutorSummary("13", "host:port", true, 1,
-    10, 15, 1, 1, 1,
-    4, 0, 2, 280,
-    30, 100, 100,
-    10, false, 20, new Date(1639300001000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(),
-    metrics, Map(), Map(), 1, false, Set())
-
-  val execWithBiggestTotalShuffleWrite = new ExecutorSummary("14", "host:port", true, 1,
-    10, 10, 1, 1, 1,
-    4, 0, 2, 280,
-    30, 100, 100,
-    15, false, 20, new Date(1639300001000L),
-    Option.empty, Option.empty, Map(), Option.empty, Set(),
-    metrics, Map(), Map(), 1, false, Set())
 
   val list = Seq(driverSummary, execWithSmallestID, execWithSmallestAddTime,
     execWithBiggestTotalGCTime, execWithBiggestTotalDuration, execWithBiggestFailedTasks,
-    execWithBiggestAverageDuration, execWithoutTasks, execNormal, execWithTwoDigitID,
-    execWithBiggestPeakJVMOnHeapMemory, execWithBiggestPeakJVMOffHeapMemory,
-    execWithBiggestDiskUsed, execWithBiggestTotalShuffleWrite)
+    execWithBiggestAverageDuration, execWithoutTasks, execNormal, execWithTwoDigitID)
 
   override def beforeEach(): Unit = {
     super.beforeEach()
@@ -170,80 +129,63 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
 
   test("Empty executor list") {
     ExecutorRollPolicy.values.foreach { value =>
-      assert(plugin.invokePrivate[Option[String]](_choose(Seq.empty, value)).isEmpty)
+      assertEquals(None, plugin.invokePrivate[Option[String]](_choose(Seq.empty, value)))
     }
   }
 
   test("Driver summary should be ignored") {
     ExecutorRollPolicy.values.foreach { value =>
-      assert(plugin.invokePrivate(_choose(Seq(driverSummary), value)).isEmpty)
+      assertEquals(plugin.invokePrivate(_choose(Seq(driverSummary), value)), None)
     }
   }
 
   test("A one-item executor list") {
     ExecutorRollPolicy.values.filter(_ != ExecutorRollPolicy.OUTLIER_NO_FALLBACK).foreach { value =>
-      assert(
-        plugin.invokePrivate(_choose(Seq(execWithSmallestID), value))
-          .contains(execWithSmallestID.id))
+      assertEquals(
+        Some(execWithSmallestID.id),
+        plugin.invokePrivate(_choose(Seq(execWithSmallestID), value)))
     }
   }
 
   test("SPARK-37806: All policy should ignore executor if totalTasks < minTasks") {
     plugin.asInstanceOf[ExecutorRollDriverPlugin].minTasks = 1000
     ExecutorRollPolicy.values.foreach { value =>
-      assert(plugin.invokePrivate(_choose(list, value)).isEmpty)
+      assertEquals(None, plugin.invokePrivate(_choose(list, value)))
     }
   }
 
   test("Policy: ID") {
-    assert(plugin.invokePrivate(_choose(list, ExecutorRollPolicy.ID)).contains("1"))
-    assert(plugin.invokePrivate(_choose(list.filter(_.id != "1"), ExecutorRollPolicy.ID))
-      .contains("2"))
+    assertEquals(Some("1"), plugin.invokePrivate(_choose(list, ExecutorRollPolicy.ID)))
+    assertEquals(Some("2"), plugin.invokePrivate(_choose(list.filter(_.id != "1"),
+      ExecutorRollPolicy.ID)))
   }
 
   test("Policy: ADD_TIME") {
-    assert(plugin.invokePrivate(_choose(list, ExecutorRollPolicy.ADD_TIME)).contains("2"))
+    assertEquals(Some("2"), plugin.invokePrivate(_choose(list, ExecutorRollPolicy.ADD_TIME)))
   }
 
   test("Policy: TOTAL_GC_TIME") {
-    assert(plugin.invokePrivate(_choose(list, ExecutorRollPolicy.TOTAL_GC_TIME)).contains("3"))
+    assertEquals(Some("3"), plugin.invokePrivate(_choose(list, ExecutorRollPolicy.TOTAL_GC_TIME)))
   }
 
   test("Policy: TOTAL_DURATION") {
-    assert(plugin.invokePrivate(_choose(list, ExecutorRollPolicy.TOTAL_DURATION)).contains("4"))
+    assertEquals(Some("4"), plugin.invokePrivate(_choose(list, ExecutorRollPolicy.TOTAL_DURATION)))
   }
 
   test("Policy: FAILED_TASKS") {
-    assert(plugin.invokePrivate(_choose(list, ExecutorRollPolicy.FAILED_TASKS)).contains("5"))
+    assertEquals(Some("5"), plugin.invokePrivate(_choose(list, ExecutorRollPolicy.FAILED_TASKS)))
   }
 
   test("Policy: AVERAGE_DURATION") {
-    assert(plugin.invokePrivate(_choose(list, ExecutorRollPolicy.AVERAGE_DURATION)).contains("6"))
-  }
-
-  test("Policy: PEAK_JVM_ONHEAP_MEMORY") {
-    assert(plugin.invokePrivate(
-      _choose(list, ExecutorRollPolicy.PEAK_JVM_ONHEAP_MEMORY)).contains("11"))
-  }
-
-  test("Policy: PEAK_JVM_OFFHEAP_MEMORY") {
-    assert(plugin.invokePrivate(
-      _choose(list, ExecutorRollPolicy.PEAK_JVM_OFFHEAP_MEMORY)).contains("12"))
-  }
-
-  test("Policy: DISK_USED") {
-    assert(plugin.invokePrivate(_choose(list, ExecutorRollPolicy.DISK_USED)).contains("13"))
-  }
-
-  test("Policy: TOTAL_SHUFFLE_WRITE") {
-    assert(plugin.invokePrivate(
-      _choose(list, ExecutorRollPolicy.TOTAL_SHUFFLE_WRITE)).contains("14"))
+    assertEquals(
+      Some("6"),
+      plugin.invokePrivate(_choose(list, ExecutorRollPolicy.AVERAGE_DURATION)))
   }
 
   test("Policy: OUTLIER - Work like TOTAL_DURATION if there is no outlier") {
-    assert(
-      plugin.invokePrivate(_choose(list, ExecutorRollPolicy.TOTAL_DURATION)) ==
-        plugin.invokePrivate(_choose(list, ExecutorRollPolicy.OUTLIER)))
+    assertEquals(
+      plugin.invokePrivate(_choose(list, ExecutorRollPolicy.TOTAL_DURATION)),
+      plugin.invokePrivate(_choose(list, ExecutorRollPolicy.OUTLIER)))
   }
 
   test("Policy: OUTLIER - Detect an average task duration outlier") {
@@ -254,9 +196,9 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
       0, false, 0, new Date(1639300001000L),
       Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
       false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.AVERAGE_DURATION)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER)))
+    assertEquals(
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.AVERAGE_DURATION)),
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER)))
   }
 
   test("Policy: OUTLIER - Detect a total task duration outlier") {
@@ -267,9 +209,9 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
       0, false, 0, new Date(1639300001000L),
       Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
       false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.TOTAL_DURATION)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER)))
+    assertEquals(
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.TOTAL_DURATION)),
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER)))
   }
 
   test("Policy: OUTLIER - Detect a total GC time outlier") {
@@ -280,43 +222,13 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
       0, false, 0, new Date(1639300001000L),
       Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
       false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.TOTAL_GC_TIME)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER)))
-  }
-
-  test("Policy: OUTLIER - Detect a peak JVM on-heap memory outlier") {
-    val outlier = new ExecutorSummary("9999", "host:port", true, 1,
-      0, 0, 1, 0, 0,
-      3, 0, 1, 100,
-      1000, 0, 0,
-      0, false, 0, new Date(1639300001000L),
-      Option.empty, Option.empty, Map(), Option.empty, Set(),
-      Some(new ExecutorMetrics(Map("JVMHeapMemory" -> 2048L, "JVMOffHeapMemory" -> 1200L))),
-      Map(), Map(), 1,
-      false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.PEAK_JVM_ONHEAP_MEMORY)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER)))
-  }
-
-  test("Policy: OUTLIER - Detect a peak JVM off-heap memory outlier") {
-    val outlier = new ExecutorSummary("9999", "host:port", true, 1,
-      0, 0, 1, 0, 0,
-      3, 0, 1, 100,
-      1000, 0, 0,
-      0, false, 0, new Date(1639300001000L),
-      Option.empty, Option.empty, Map(), Option.empty, Set(),
-      Some(new ExecutorMetrics(Map("JVMHeapMemory" -> 1024L, "JVMOffHeapMemory" -> 2048L))),
-      Map(), Map(), 1,
-      false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.PEAK_JVM_OFFHEAP_MEMORY)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER)))
+    assertEquals(
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.TOTAL_GC_TIME)),
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER)))
   }
 
   test("Policy: OUTLIER_NO_FALLBACK - Return None if there are no outliers") {
-    assert(plugin.invokePrivate(_choose(list, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)).isEmpty)
+    assertEquals(None, plugin.invokePrivate(_choose(list, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
   }
 
   test("Policy: OUTLIER_NO_FALLBACK - Detect an average task duration outlier") {
@@ -327,9 +239,9 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
       0, false, 0, new Date(1639300001000L),
       Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
       false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.AVERAGE_DURATION)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
+    assertEquals(
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.AVERAGE_DURATION)),
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
   }
 
   test("Policy: OUTLIER_NO_FALLBACK - Detect a total task duration outlier") {
@@ -340,9 +252,9 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
       0, false, 0, new Date(1639300001000L),
       Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
       false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.TOTAL_DURATION)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
+    assertEquals(
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.TOTAL_DURATION)),
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
   }
 
   test("Policy: OUTLIER_NO_FALLBACK - Detect a total GC time outlier") {
@@ -353,65 +265,8 @@ class ExecutorRollPluginSuite extends SparkFunSuite with PrivateMethodTester {
       0, false, 0, new Date(1639300001000L),
       Option.empty, Option.empty, Map(), Option.empty, Set(), Option.empty, Map(), Map(), 1,
       false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.TOTAL_GC_TIME)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
-  }
-
-  test("Policy: OUTLIER_NO_FALLBACK - Detect a peak JVM on-heap memory outlier") {
-    val outlier = new ExecutorSummary("9999", "host:port", true, 1,
-      0, 0, 1, 0, 0,
-      3, 0, 1, 100,
-      0, 0, 0,
-      0, false, 0, new Date(1639300001000L),
-      Option.empty, Option.empty, Map(), Option.empty, Set(),
-      Some(new ExecutorMetrics(Map("JVMHeapMemory" -> 2048L, "JVMOffHeapMemory" -> 1200L))),
-      Map(), Map(), 1,
-      false, Set())
-    val x = plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.TOTAL_GC_TIME))
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.PEAK_JVM_ONHEAP_MEMORY)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
-  }
-
-  test("Policy: OUTLIER_NO_FALLBACK - Detect a peak JVM off-heap memory outlier") {
-    val outlier = new ExecutorSummary("9999", "host:port", true, 1,
-      0, 0, 1, 0, 0,
-      3, 0, 1, 100,
-      0, 0, 0,
-      0, false, 0, new Date(1639300001000L),
-      Option.empty, Option.empty, Map(), Option.empty, Set(),
-      Some(new ExecutorMetrics(Map("JVMHeapMemory" -> 1024L, "JVMOffHeapMemory" -> 2048L))),
-      Map(), Map(), 1,
-      false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.PEAK_JVM_OFFHEAP_MEMORY)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
-  }
-
-  test("Policy: OUTLIER_NO_FALLBACK - Detect an used disk outlier") {
-    val outlier = new ExecutorSummary("9999", "host:port", true, 1,
-      0, 100000, 1, 0, 0,
-      3, 0, 1, 100,
-      0, 0, 0,
-      0, false, 0, new Date(1639300001000L),
-      Option.empty, Option.empty, Map(), Option.empty, Set(),
-      metrics, Map(), Map(), 1, false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.DISK_USED)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
-  }
-
-  test("Policy: OUTLIER_NO_FALLBACK - Detect a total shuffle write outlier") {
-    val outlier = new ExecutorSummary("9999", "host:port", true, 1,
-      0, 10, 1, 0, 0,
-      3, 0, 1, 100,
-      0, 0, 0,
-      1000, false, 0, new Date(1639300001000L),
-      Option.empty, Option.empty, Map(), Option.empty, Set(),
-      metrics, Map(), Map(), 1, false, Set())
-    assert(
-      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.TOTAL_SHUFFLE_WRITE)) ==
-        plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
+    assertEquals(
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.TOTAL_GC_TIME)),
+      plugin.invokePrivate(_choose(list :+ outlier, ExecutorRollPolicy.OUTLIER_NO_FALLBACK)))
   }
 }

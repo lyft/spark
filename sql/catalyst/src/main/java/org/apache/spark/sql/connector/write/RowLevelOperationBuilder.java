@@ -15,15 +15,35 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:sql/catalyst/src/main/java/org/apache/spark/sql/connector/read/SupportsPushDownOffset.java
+package org.apache.spark.sql.connector.read;
+
+import org.apache.spark.annotation.Evolving;
+
+/**
+ * A mix-in interface for {@link ScanBuilder}. Data sources can implement this interface to
+ * push down OFFSET. We can push down OFFSET with many other operations if they follow the
+ * operator order we defined in {@link ScanBuilder}'s class doc.
+========
 package org.apache.spark.sql.connector.write;
 
 import org.apache.spark.annotation.Experimental;
 
 /**
  * An interface for building a {@link RowLevelOperation}.
+>>>>>>>> c93bba8b9d4823c0d891561e041eaec91be0c11b:sql/catalyst/src/main/java/org/apache/spark/sql/connector/write/RowLevelOperationBuilder.java
  *
- * @since 3.3.0
+ * @since 3.4.0
  */
+<<<<<<<< HEAD:sql/catalyst/src/main/java/org/apache/spark/sql/connector/read/SupportsPushDownOffset.java
+@Evolving
+public interface SupportsPushDownOffset extends ScanBuilder {
+
+  /**
+   * Pushes down OFFSET to the data source.
+   */
+  boolean pushOffset(int offset);
+========
 @Experimental
 public interface RowLevelOperationBuilder {
   /**
@@ -31,4 +51,5 @@ public interface RowLevelOperationBuilder {
    * for DELETE, UPDATE, MERGE commands.
    */
   RowLevelOperation build();
+>>>>>>>> c93bba8b9d4823c0d891561e041eaec91be0c11b:sql/catalyst/src/main/java/org/apache/spark/sql/connector/write/RowLevelOperationBuilder.java
 }

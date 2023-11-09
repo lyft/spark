@@ -23,7 +23,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.connector.expressions.{FieldReference, SortOrder}
 import org.apache.spark.sql.connector.expressions.aggregate.Aggregation
 import org.apache.spark.sql.connector.expressions.filter.Predicate
-import org.apache.spark.sql.connector.read.{ScanBuilder, SupportsPushDownAggregates, SupportsPushDownLimit, SupportsPushDownOffset, SupportsPushDownRequiredColumns, SupportsPushDownTableSample, SupportsPushDownTopN, SupportsPushDownV2Filters}
+import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownAggregates, SupportsPushDownLimit, SupportsPushDownRequiredColumns, SupportsPushDownTableSample, SupportsPushDownTopN, SupportsPushDownV2Filters}
 import org.apache.spark.sql.execution.datasources.PartitioningUtils
 import org.apache.spark.sql.execution.datasources.jdbc.{JDBCOptions, JDBCRDD, JDBCRelation}
 import org.apache.spark.sql.execution.datasources.v2.TableSampleInfo
@@ -39,7 +39,6 @@ case class JDBCScanBuilder(
     with SupportsPushDownRequiredColumns
     with SupportsPushDownAggregates
     with SupportsPushDownLimit
-    with SupportsPushDownOffset
     with SupportsPushDownTableSample
     with SupportsPushDownTopN
     with Logging {
@@ -54,9 +53,7 @@ case class JDBCScanBuilder(
 
   private var pushedLimit = 0
 
-  private var pushedOffset = 0
-
-  private var sortOrders: Array[String] = Array.empty[String]
+  private var sortOrders: Array[SortOrder] = Array.empty[SortOrder]
 
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
     if (jdbcOptions.pushDownPredicate) {
@@ -106,8 +103,7 @@ case class JDBCScanBuilder(
       "GROUP BY " + compiledGroupBys.mkString(",")
     }
 
-    val aggQuery = jdbcOptions.prepareQuery +
-      s"SELECT ${selectList.mkString(",")} FROM ${jdbcOptions.tableOrQuery} " +
+    val aggQuery = s"SELECT ${selectList.mkString(",")} FROM ${jdbcOptions.tableOrQuery} " +
       s"WHERE 1=0 $groupByClause"
     try {
       finalSchema = JDBCRDD.getQueryOutputSchema(aggQuery, jdbcOptions, dialect)
@@ -142,26 +138,10 @@ case class JDBCScanBuilder(
     false
   }
 
-  override def pushOffset(offset: Int): Boolean = {
-    if (jdbcOptions.pushDownOffset && !isPartiallyPushed) {
-      // Spark pushes down LIMIT first, then OFFSET. In SQL statements, OFFSET is applied before
-      // LIMIT. Here we need to adjust the LIMIT value to match SQL statements.
-      if (pushedLimit > 0) {
-        pushedLimit = pushedLimit - offset
-      }
-      pushedOffset = offset
-      return true
-    }
-    false
-  }
-
   override def pushTopN(orders: Array[SortOrder], limit: Int): Boolean = {
     if (jdbcOptions.pushDownLimit) {
-      val dialect = JdbcDialects.get(jdbcOptions.url)
-      val compiledOrders = orders.flatMap(dialect.compileExpression(_))
-      if (orders.length != compiledOrders.length) return false
       pushedLimit = limit
-      sortOrders = compiledOrders
+      sortOrders = orders
       return true
     }
     false
@@ -181,7 +161,7 @@ case class JDBCScanBuilder(
     finalSchema = StructType(fields)
   }
 
-  override def build(): JDBCScan = {
+  override def build(): Scan = {
     val resolver = session.sessionState.conf.resolver
     val timeZoneId = session.sessionState.conf.sessionLocalTimeZone
     val parts = JDBCRelation.columnPartition(schema, resolver, timeZoneId, jdbcOptions)
@@ -194,6 +174,6 @@ case class JDBCScanBuilder(
     // prunedSchema and quote them (will become "MAX(SALARY)", "MIN(BONUS)" and can't
     // be used in sql string.
     JDBCScan(JDBCRelation(schema, parts, jdbcOptions)(session), finalSchema, pushedPredicate,
-      pushedAggregateList, pushedGroupBys, tableSample, pushedLimit, sortOrders, pushedOffset)
+      pushedAggregateList, pushedGroupBys, tableSample, pushedLimit, sortOrders)
   }
 }

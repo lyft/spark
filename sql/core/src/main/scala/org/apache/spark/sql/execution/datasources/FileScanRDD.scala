@@ -18,7 +18,6 @@
 package org.apache.spark.sql.execution.datasources
 
 import java.io.{Closeable, FileNotFoundException, IOException}
-import java.net.URI
 
 import scala.util.control.NonFatal
 
@@ -26,17 +25,15 @@ import org.apache.hadoop.fs.Path
 
 import org.apache.spark.{Partition => RDDPartition, SparkUpgradeException, TaskContext}
 import org.apache.spark.deploy.SparkHadoopUtil
-import org.apache.spark.paths.SparkPath
 import org.apache.spark.rdd.{InputFileBlockHolder, RDD}
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.{FileSourceOptions, InternalRow}
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{AttributeReference, GenericInternalRow, JoinedRow, UnsafeProjection, UnsafeRow}
-import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.execution.datasources.FileFormat._
 import org.apache.spark.sql.execution.vectorized.ConstantColumnVector
 import org.apache.spark.sql.types.{LongType, StringType, StructType}
-import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
+import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.unsafe.types.UTF8String
 import org.apache.spark.util.NextIterator
 
@@ -53,17 +50,12 @@ import org.apache.spark.util.NextIterator
  */
 case class PartitionedFile(
     partitionValues: InternalRow,
-    filePath: SparkPath,
+    filePath: String,
     start: Long,
     length: Long,
     @transient locations: Array[String] = Array.empty,
     modificationTime: Long = 0L,
     fileSize: Long = 0L) {
-
-  def pathUri: URI = filePath.toUri
-  def toPath: Path = filePath.toPath
-  def urlEncodedPath: String = filePath.urlEncoded
-
   override def toString: String = {
     s"path: $filePath, range: $start-${start + length}, partition values: $partitionValues"
   }
@@ -77,12 +69,11 @@ class FileScanRDD(
     readFunction: (PartitionedFile) => Iterator[InternalRow],
     @transient val filePartitions: Seq[FilePartition],
     val readSchema: StructType,
-    val metadataColumns: Seq[AttributeReference] = Seq.empty,
-    options: FileSourceOptions = new FileSourceOptions(CaseInsensitiveMap(Map.empty)))
+    val metadataColumns: Seq[AttributeReference] = Seq.empty)
   extends RDD[InternalRow](sparkSession.sparkContext, Nil) {
 
-  private val ignoreCorruptFiles = options.ignoreCorruptFiles
-  private val ignoreMissingFiles = options.ignoreMissingFiles
+  private val ignoreCorruptFiles = sparkSession.sessionState.conf.ignoreCorruptFiles
+  private val ignoreMissingFiles = sparkSession.sessionState.conf.ignoreMissingFiles
 
   override def compute(split: RDDPartition, context: TaskContext): Iterator[InternalRow] = {
     val iterator = new Iterator[Object] with AutoCloseable {
@@ -140,45 +131,32 @@ class FileScanRDD(
       }
 
       /**
-       * The value of some of the metadata columns remains exactly the same for each record of
-       * a partitioned file. Only need to update their values in the metadata row when `currentFile`
-       * is changed.
+       * For each partitioned file, metadata columns for each record in the file are exactly same.
+       * Only update metadata row when `currentFile` is changed.
        */
       private def updateMetadataRow(): Unit =
         if (metadataColumns.nonEmpty && currentFile != null) {
           updateMetadataInternalRow(metadataRow, metadataColumns.map(_.name),
-            currentFile.toPath, currentFile.fileSize, currentFile.start, currentFile.length,
-            currentFile.modificationTime)
+            new Path(currentFile.filePath), currentFile.fileSize, currentFile.modificationTime)
         }
 
       /**
        * Create an array of constant column vectors containing all required metadata columns
        */
-      private def createMetadataColumnVector(c: ColumnarBatch): Array[ColumnVector] = {
-        val path = currentFile.toPath
+      private def createMetadataColumnVector(c: ColumnarBatch): Array[ConstantColumnVector] = {
+        val path = new Path(currentFile.filePath)
         metadataColumns.map(_.name).map {
           case FILE_PATH =>
             val columnVector = new ConstantColumnVector(c.numRows(), StringType)
-            // Use `new Path(Path.toString)` as a form of canonicalization
-            val pathString = new Path(path.toString).toUri.toString
-            columnVector.setUtf8String(UTF8String.fromString(pathString))
+            columnVector.setUtf8String(UTF8String.fromString(path.toString))
             columnVector
           case FILE_NAME =>
             val columnVector = new ConstantColumnVector(c.numRows(), StringType)
-            val fileName = path.toUri.getRawPath.split("/").lastOption.getOrElse("")
-            columnVector.setUtf8String(UTF8String.fromString(fileName))
+            columnVector.setUtf8String(UTF8String.fromString(path.getName))
             columnVector
           case FILE_SIZE =>
             val columnVector = new ConstantColumnVector(c.numRows(), LongType)
             columnVector.setLong(currentFile.fileSize)
-            columnVector
-          case FILE_BLOCK_START =>
-            val columnVector = new ConstantColumnVector(c.numRows(), LongType)
-            columnVector.setLong(currentFile.start)
-            columnVector
-          case FILE_BLOCK_LENGTH =>
-            val columnVector = new ConstantColumnVector(c.numRows(), LongType)
-            columnVector.setLong(currentFile.length)
             columnVector
           case FILE_MODIFICATION_TIME =>
             val columnVector = new ConstantColumnVector(c.numRows(), LongType)
@@ -242,8 +220,7 @@ class FileScanRDD(
           updateMetadataRow()
           logInfo(s"Reading File $currentFile")
           // Sets InputFileBlockHolder for the file block's information
-          InputFileBlockHolder
-            .set(currentFile.urlEncodedPath, currentFile.start, currentFile.length)
+          InputFileBlockHolder.set(currentFile.filePath, currentFile.start, currentFile.length)
 
           resetCurrentIterator()
           if (ignoreMissingFiles || ignoreCorruptFiles) {
@@ -298,13 +275,12 @@ class FileScanRDD(
           } catch {
             case e: SchemaColumnConvertNotSupportedException =>
               throw QueryExecutionErrors.unsupportedSchemaColumnConvertError(
-                currentFile.urlEncodedPath, e.getColumn, e.getLogicalType, e.getPhysicalType, e)
+                currentFile.filePath, e.getColumn, e.getLogicalType, e.getPhysicalType, e)
             case sue: SparkUpgradeException => throw sue
             case NonFatal(e) =>
               e.getCause match {
                 case sue: SparkUpgradeException => throw sue
-                case _ =>
-                  throw QueryExecutionErrors.cannotReadFilesError(e, currentFile.urlEncodedPath)
+                case _ => throw QueryExecutionErrors.cannotReadFilesError(e, currentFile.filePath)
               }
           }
         } else {

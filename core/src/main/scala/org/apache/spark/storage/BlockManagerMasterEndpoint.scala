@@ -29,11 +29,11 @@ import scala.util.control.NonFatal
 
 import com.google.common.cache.CacheBuilder
 
-import org.apache.spark.{MapOutputTrackerMaster, SparkConf, SparkContext}
+import org.apache.spark.{MapOutputTrackerMaster, SparkConf}
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.{config, Logging}
-import org.apache.spark.network.shuffle.{ExternalBlockStoreClient, RemoteBlockPushResolver}
-import org.apache.spark.rpc.{IsolatedThreadSafeRpcEndpoint, RpcCallContext, RpcEndpointRef, RpcEnv}
+import org.apache.spark.network.shuffle.ExternalBlockStoreClient
+import org.apache.spark.rpc.{IsolatedRpcEndpoint, RpcCallContext, RpcEndpointRef, RpcEnv}
 import org.apache.spark.scheduler._
 import org.apache.spark.scheduler.cluster.{CoarseGrainedClusterMessages, CoarseGrainedSchedulerBackend}
 import org.apache.spark.shuffle.ShuffleManager
@@ -41,8 +41,8 @@ import org.apache.spark.storage.BlockManagerMessages._
 import org.apache.spark.util.{RpcUtils, ThreadUtils, Utils}
 
 /**
- * BlockManagerMasterEndpoint is an [[IsolatedThreadSafeRpcEndpoint]] on the master node to
- * track statuses of all the storage endpoints' block managers.
+ * BlockManagerMasterEndpoint is an [[IsolatedRpcEndpoint]] on the master node to track statuses
+ * of all the storage endpoints' block managers.
  */
 private[spark]
 class BlockManagerMasterEndpoint(
@@ -55,7 +55,7 @@ class BlockManagerMasterEndpoint(
     mapOutputTracker: MapOutputTrackerMaster,
     shuffleManager: ShuffleManager,
     isDriver: Boolean)
-  extends IsolatedThreadSafeRpcEndpoint with Logging {
+  extends IsolatedRpcEndpoint with Logging {
 
   // Mapping from executor id to the block manager's local disk directories.
   private val executorIdToLocalDirs =
@@ -117,10 +117,8 @@ class BlockManagerMasterEndpoint(
     RpcUtils.makeDriverRef(CoarseGrainedSchedulerBackend.ENDPOINT_NAME, conf, rpcEnv)
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
-    case RegisterBlockManager(
-      id, localDirs, maxOnHeapMemSize, maxOffHeapMemSize, endpoint, isReRegister) =>
-      context.reply(
-        register(id, localDirs, maxOnHeapMemSize, maxOffHeapMemSize, endpoint, isReRegister))
+    case RegisterBlockManager(id, localDirs, maxOnHeapMemSize, maxOffHeapMemSize, endpoint) =>
+      context.reply(register(id, localDirs, maxOnHeapMemSize, maxOffHeapMemSize, endpoint))
 
     case _updateBlockInfo @
         UpdateBlockInfo(blockManagerId, blockId, storageLevel, deserializedSize, size) =>
@@ -231,10 +229,8 @@ class BlockManagerMasterEndpoint(
       bmId: BlockManagerId,
       defaultValue: T): PartialFunction[Throwable, T] = {
     case e: IOException =>
-      if (!SparkContext.getActive.map(_.isStopped).getOrElse(true)) {
-        logWarning(s"Error trying to remove $blockType $blockId" +
-          s" from block manager $bmId", e)
-      }
+      logWarning(s"Error trying to remove $blockType $blockId" +
+        s" from block manager $bmId", e)
       defaultValue
 
     case t: TimeoutException =>
@@ -323,6 +319,14 @@ class BlockManagerMasterEndpoint(
   }
 
   private def removeShuffle(shuffleId: Int): Future[Seq[Boolean]] = {
+    val removeMsg = RemoveShuffle(shuffleId)
+    val removeShuffleFromExecutorsFutures = blockManagerInfo.values.map { bm =>
+      bm.storageEndpoint.ask[Boolean](removeMsg).recover {
+        // use false as default value means no shuffle data were removed
+        handleBlockRemovalFailure("shuffle", shuffleId.toString, bm.blockManagerId, false)
+      }
+    }.toSeq
+
     // Find all shuffle blocks on executors that are no longer running
     val blocksToDeleteByShuffleService =
       new mutable.HashMap[BlockManagerId, mutable.HashSet[BlockId]]
@@ -360,32 +364,8 @@ class BlockManagerMasterEndpoint(
         }
       }.getOrElse(Seq.empty)
 
-    val removeShuffleMergeFromShuffleServicesFutures =
-      externalBlockStoreClient.map { shuffleClient =>
-        val mergerLocations =
-          if (Utils.isPushBasedShuffleEnabled(conf, isDriver)) {
-            mapOutputTracker.getShufflePushMergerLocations(shuffleId)
-          } else {
-            Seq.empty[BlockManagerId]
-          }
-        mergerLocations.map { bmId =>
-          Future[Boolean] {
-            shuffleClient.removeShuffleMerge(bmId.host, bmId.port, shuffleId,
-              RemoteBlockPushResolver.DELETE_ALL_MERGED_SHUFFLE)
-          }
-        }
-      }.getOrElse(Seq.empty)
-
-    val removeMsg = RemoveShuffle(shuffleId)
-    val removeShuffleFromExecutorsFutures = blockManagerInfo.values.map { bm =>
-      bm.storageEndpoint.ask[Boolean](removeMsg).recover {
-        // use false as default value means no shuffle data were removed
-        handleBlockRemovalFailure("shuffle", shuffleId.toString, bm.blockManagerId, false)
-      }
-    }.toSeq
     Future.sequence(removeShuffleFromExecutorsFutures ++
-      removeShuffleFromShuffleServicesFutures ++
-      removeShuffleMergeFromShuffleServicesFutures)
+      removeShuffleFromShuffleServicesFutures)
   }
 
   /**
@@ -592,8 +572,7 @@ class BlockManagerMasterEndpoint(
       localDirs: Array[String],
       maxOnHeapMemSize: Long,
       maxOffHeapMemSize: Long,
-      storageEndpoint: RpcEndpointRef,
-      isReRegister: Boolean): BlockManagerId = {
+      storageEndpoint: RpcEndpointRef): BlockManagerId = {
     // the dummy id is not expected to contain the topology information.
     // we get that info here and respond back with a more fleshed out block manager id
     val id = BlockManagerId(
@@ -604,12 +583,7 @@ class BlockManagerMasterEndpoint(
 
     val time = System.currentTimeMillis()
     executorIdToLocalDirs.put(id.executorId, localDirs)
-    // SPARK-41360: For the block manager re-registration, we should only allow it when
-    // the executor is recognized as active by the scheduler backend. Otherwise, this kind
-    // of re-registration from the terminating/stopped executor is meaningless and harmful.
-    lazy val isExecutorAlive =
-      driverEndpoint.askSync[Boolean](CoarseGrainedClusterMessages.IsExecutorAlive(id.executorId))
-    if (!blockManagerInfo.contains(id) && (!isReRegister || isExecutorAlive)) {
+    if (!blockManagerInfo.contains(id)) {
       blockManagerIdByExecutor.get(id.executorId) match {
         case Some(oldId) =>
           // A block manager of the same executor already exists, so remove it (assumed dead)
@@ -642,29 +616,10 @@ class BlockManagerMasterEndpoint(
       if (pushBasedShuffleEnabled) {
         addMergerLocation(id)
       }
-      listenerBus.post(SparkListenerBlockManagerAdded(time, id,
-        maxOnHeapMemSize + maxOffHeapMemSize, Some(maxOnHeapMemSize), Some(maxOffHeapMemSize)))
     }
-    val updatedId = if (isReRegister && !isExecutorAlive) {
-      assert(!blockManagerInfo.contains(id),
-        "BlockManager re-registration shouldn't succeed when the executor is lost")
-
-      logInfo(s"BlockManager ($id) re-registration is rejected since " +
-        s"the executor (${id.executorId}) has been lost")
-
-      // Use "invalid" as the return executor id to indicate the block manager that
-      // re-registration failed. It's a bit hacky but fine since the returned block
-      // manager id won't be accessed in the case of re-registration. And we'll use
-      // this "invalid" executor id to print better logs and avoid blocks reporting.
-      BlockManagerId(
-        BlockManagerId.INVALID_EXECUTOR_ID,
-        id.host,
-        id.port,
-        id.topologyInfo)
-    } else {
-      id
-    }
-    updatedId
+    listenerBus.post(SparkListenerBlockManagerAdded(time, id, maxOnHeapMemSize + maxOffHeapMemSize,
+        Some(maxOnHeapMemSize), Some(maxOffHeapMemSize)))
+    id
   }
 
  private def updateShuffleBlockInfo(blockId: BlockId, blockManagerId: BlockManagerId)

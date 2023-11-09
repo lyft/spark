@@ -19,12 +19,9 @@ package org.apache.spark.sql.errors
 
 import java.util.Locale
 
-import org.apache.spark.QueryContext
-import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
 import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
-import org.apache.spark.sql.catalyst.trees.SQLQueryContext
 import org.apache.spark.sql.catalyst.util.{quoteIdentifier, toPrettySQL}
-import org.apache.spark.sql.types.{AbstractDataType, DataType, DoubleType, FloatType, TypeCollection}
+import org.apache.spark.sql.types.{DataType, DoubleType, FloatType}
 
 /**
  * The trait exposes util methods for preparing error messages such as quoting of error elements.
@@ -75,13 +72,11 @@ private[sql] trait QueryErrorsBase {
   }
 
   def toSQLId(parts: String): String = {
-    toSQLId(UnresolvedAttribute.parseAttributeName(parts))
+    toSQLId(parts.split("\\."))
   }
 
-  def toSQLType(t: AbstractDataType): String = t match {
-    case TypeCollection(types) => types.map(toSQLType).mkString("(", " or ", ")")
-    case dt: DataType => quoteByDefault(dt.sql)
-    case at => quoteByDefault(at.simpleString.toUpperCase(Locale.ROOT))
+  def toSQLType(t: DataType): String = {
+    quoteByDefault(t.sql)
   }
 
   def toSQLType(text: String): String = {
@@ -92,27 +87,11 @@ private[sql] trait QueryErrorsBase {
     quoteByDefault(conf)
   }
 
-  def toSQLConfVal(conf: String): String = {
-    quoteByDefault(conf)
-  }
-
   def toDSOption(option: String): String = {
     quoteByDefault(option)
   }
 
   def toSQLExpr(e: Expression): String = {
     quoteByDefault(toPrettySQL(e))
-  }
-
-  def toSQLSchema(schema: String): String = {
-    quoteByDefault(schema)
-  }
-
-  def getSummary(sqlContext: SQLQueryContext): String = {
-    if (sqlContext == null) "" else sqlContext.summary
-  }
-
-  def getQueryContext(sqlContext: SQLQueryContext): Array[QueryContext] = {
-    if (sqlContext == null) Array.empty else Array(sqlContext.asInstanceOf[QueryContext])
   }
 }

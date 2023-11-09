@@ -22,16 +22,16 @@ TakeOrderedAndProject (45)
       :     :                                   :     :  +- * BroadcastHashJoin Inner BuildRight (8)
       :     :                                   :     :     :- * Filter (3)
       :     :                                   :     :     :  +- * ColumnarToRow (2)
-      :     :                                   :     :     :     +- Scan parquet spark_catalog.default.item (1)
+      :     :                                   :     :     :     +- Scan parquet default.item (1)
       :     :                                   :     :     +- BroadcastExchange (7)
       :     :                                   :     :        +- * Filter (6)
       :     :                                   :     :           +- * ColumnarToRow (5)
-      :     :                                   :     :              +- Scan parquet spark_catalog.default.store_sales (4)
+      :     :                                   :     :              +- Scan parquet default.store_sales (4)
       :     :                                   :     +- ReusedExchange (10)
       :     :                                   +- BroadcastExchange (16)
       :     :                                      +- * Filter (15)
       :     :                                         +- * ColumnarToRow (14)
-      :     :                                            +- Scan parquet spark_catalog.default.store (13)
+      :     :                                            +- Scan parquet default.store (13)
       :     +- BroadcastExchange (35)
       :        +- * Project (34)
       :           +- Window (33)
@@ -46,7 +46,7 @@ TakeOrderedAndProject (45)
                   +- ReusedExchange (38)
 
 
-(1) Scan parquet spark_catalog.default.item
+(1) Scan parquet default.item
 Output [3]: [i_item_sk#1, i_brand#2, i_category#3]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/item]
@@ -60,7 +60,7 @@ Input [3]: [i_item_sk#1, i_brand#2, i_category#3]
 Input [3]: [i_item_sk#1, i_brand#2, i_category#3]
 Condition : ((isnotnull(i_item_sk#1) AND isnotnull(i_category#3)) AND isnotnull(i_brand#2))
 
-(4) Scan parquet spark_catalog.default.store_sales
+(4) Scan parquet default.store_sales
 Output [4]: [ss_item_sk#4, ss_store_sk#5, ss_sales_price#6, ss_sold_date_sk#7]
 Batched: true
 Location: InMemoryFileIndex []
@@ -82,7 +82,6 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, false] as bigint)
 (8) BroadcastHashJoin [codegen id : 4]
 Left keys [1]: [i_item_sk#1]
 Right keys [1]: [ss_item_sk#4]
-Join type: Inner
 Join condition: None
 
 (9) Project [codegen id : 4]
@@ -95,14 +94,13 @@ Output [3]: [d_date_sk#9, d_year#10, d_moy#11]
 (11) BroadcastHashJoin [codegen id : 4]
 Left keys [1]: [ss_sold_date_sk#7]
 Right keys [1]: [d_date_sk#9]
-Join type: Inner
 Join condition: None
 
 (12) Project [codegen id : 4]
 Output [6]: [i_brand#2, i_category#3, ss_store_sk#5, ss_sales_price#6, d_year#10, d_moy#11]
 Input [8]: [i_brand#2, i_category#3, ss_store_sk#5, ss_sales_price#6, ss_sold_date_sk#7, d_date_sk#9, d_year#10, d_moy#11]
 
-(13) Scan parquet spark_catalog.default.store
+(13) Scan parquet default.store
 Output [3]: [s_store_sk#12, s_store_name#13, s_company_name#14]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/store]
@@ -123,7 +121,6 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, false] as bigint)
 (17) BroadcastHashJoin [codegen id : 4]
 Left keys [1]: [ss_store_sk#5]
 Right keys [1]: [s_store_sk#12]
-Join type: Inner
 Join condition: None
 
 (18) Project [codegen id : 4]
@@ -170,7 +167,7 @@ Arguments: [avg(_w0#19) windowspecdefinition(i_category#3, i_brand#2, s_store_na
 
 (27) Filter [codegen id : 22]
 Input [10]: [i_category#3, i_brand#2, s_store_name#13, s_company_name#14, d_year#10, d_moy#11, sum_sales#18, _w0#19, rn#20, avg_monthly_sales#21]
-Condition : ((isnotnull(avg_monthly_sales#21) AND (avg_monthly_sales#21 > 0.000000)) AND CASE WHEN (avg_monthly_sales#21 > 0.000000) THEN ((abs((sum_sales#18 - avg_monthly_sales#21)) / avg_monthly_sales#21) > 0.1000000000000000) END)
+Condition : ((isnotnull(avg_monthly_sales#21) AND (avg_monthly_sales#21 > 0.000000)) AND CASE WHEN (avg_monthly_sales#21 > 0.000000) THEN (CheckOverflow((promote_precision(abs(CheckOverflow((promote_precision(cast(sum_sales#18 as decimal(22,6))) - promote_precision(cast(avg_monthly_sales#21 as decimal(22,6)))), DecimalType(22,6)))) / promote_precision(cast(avg_monthly_sales#21 as decimal(22,6)))), DecimalType(38,16)) > 0.1000000000000000) END)
 
 (28) Project [codegen id : 22]
 Output [9]: [i_category#3, i_brand#2, s_store_name#13, s_company_name#14, d_year#10, d_moy#11, sum_sales#18, avg_monthly_sales#21, rn#20]
@@ -209,7 +206,6 @@ Arguments: HashedRelationBroadcastMode(List(input[0, string, true], input[1, str
 (36) BroadcastHashJoin [codegen id : 22]
 Left keys [5]: [i_category#3, i_brand#2, s_store_name#13, s_company_name#14, rn#20]
 Right keys [5]: [i_category#22, i_brand#23, s_store_name#24, s_company_name#25, (rn#30 + 1)]
-Join type: Inner
 Join condition: None
 
 (37) Project [codegen id : 22]
@@ -238,7 +234,6 @@ Arguments: HashedRelationBroadcastMode(List(input[0, string, true], input[1, str
 (43) BroadcastHashJoin [codegen id : 22]
 Left keys [5]: [i_category#3, i_brand#2, s_store_name#13, s_company_name#14, rn#20]
 Right keys [5]: [i_category#32, i_brand#33, s_store_name#34, s_company_name#35, (rn#38 - 1)]
-Join type: Inner
 Join condition: None
 
 (44) Project [codegen id : 22]
@@ -247,7 +242,7 @@ Input [16]: [i_category#3, i_brand#2, s_store_name#13, s_company_name#14, d_year
 
 (45) TakeOrderedAndProject
 Input [7]: [i_category#3, d_year#10, d_moy#11, avg_monthly_sales#21, sum_sales#18, psum#40, nsum#41]
-Arguments: 100, [(sum_sales#18 - avg_monthly_sales#21) ASC NULLS FIRST, d_moy#11 ASC NULLS FIRST], [i_category#3, d_year#10, d_moy#11, avg_monthly_sales#21, sum_sales#18, psum#40, nsum#41]
+Arguments: 100, [CheckOverflow((promote_precision(cast(sum_sales#18 as decimal(22,6))) - promote_precision(cast(avg_monthly_sales#21 as decimal(22,6)))), DecimalType(22,6)) ASC NULLS FIRST, d_moy#11 ASC NULLS FIRST], [i_category#3, d_year#10, d_moy#11, avg_monthly_sales#21, sum_sales#18, psum#40, nsum#41]
 
 ===== Subqueries =====
 
@@ -255,10 +250,10 @@ Subquery:1 Hosting operator id = 4 Hosting Expression = ss_sold_date_sk#7 IN dyn
 BroadcastExchange (49)
 +- * Filter (48)
    +- * ColumnarToRow (47)
-      +- Scan parquet spark_catalog.default.date_dim (46)
+      +- Scan parquet default.date_dim (46)
 
 
-(46) Scan parquet spark_catalog.default.date_dim
+(46) Scan parquet default.date_dim
 Output [3]: [d_date_sk#9, d_year#10, d_moy#11]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/date_dim]

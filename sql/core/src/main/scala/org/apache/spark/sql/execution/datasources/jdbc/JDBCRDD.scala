@@ -25,6 +25,7 @@ import org.apache.spark.{InterruptibleIterator, Partition, SparkContext, TaskCon
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.connector.expressions.SortOrder
 import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.execution.datasources.v2.TableSampleInfo
 import org.apache.spark.sql.jdbc.{JdbcDialect, JdbcDialects}
@@ -52,10 +53,9 @@ object JDBCRDD extends Logging {
    */
   def resolveTable(options: JDBCOptions): StructType = {
     val url = options.url
-    val prepareQuery = options.prepareQuery
     val table = options.tableOrQuery
     val dialect = JdbcDialects.get(url)
-    getQueryOutputSchema(prepareQuery + dialect.getSchemaQuery(table), options, dialect)
+    getQueryOutputSchema(dialect.getSchemaQuery(table), options, dialect)
   }
 
   def getQueryOutputSchema(
@@ -67,8 +67,7 @@ object JDBCRDD extends Logging {
         statement.setQueryTimeout(options.queryTimeout)
         val rs = statement.executeQuery()
         try {
-          JdbcUtils.getSchema(rs, dialect, alwaysNullable = true,
-            isTimestampNTZ = options.preferTimestampNTZ)
+          JdbcUtils.getSchema(rs, dialect, alwaysNullable = true)
         } finally {
           rs.close()
         }
@@ -124,8 +123,7 @@ object JDBCRDD extends Logging {
       groupByColumns: Option[Array[String]] = None,
       sample: Option[TableSampleInfo] = None,
       limit: Int = 0,
-      sortOrders: Array[String] = Array.empty[String],
-      offset: Int = 0): RDD[InternalRow] = {
+      sortOrders: Array[SortOrder] = Array.empty[SortOrder]): RDD[InternalRow] = {
     val url = options.url
     val dialect = JdbcDialects.get(url)
     val quotedColumns = if (groupByColumns.isEmpty) {
@@ -146,8 +144,7 @@ object JDBCRDD extends Logging {
       groupByColumns,
       sample,
       limit,
-      sortOrders,
-      offset)
+      sortOrders)
   }
   // scalastyle:on argcount
 }
@@ -169,8 +166,7 @@ private[jdbc] class JDBCRDD(
     groupByColumns: Option[Array[String]],
     sample: Option[TableSampleInfo],
     limit: Int,
-    sortOrders: Array[String],
-    offset: Int)
+    sortOrders: Array[SortOrder])
   extends RDD[InternalRow](sc, Nil) {
 
   /**
@@ -220,7 +216,7 @@ private[jdbc] class JDBCRDD(
 
   private def getOrderByClause: String = {
     if (sortOrders.nonEmpty) {
-      s" ORDER BY ${sortOrders.mkString(", ")}"
+      s" ORDER BY ${sortOrders.map(_.describe()).mkString(", ")}"
     } else {
       ""
     }
@@ -308,11 +304,9 @@ private[jdbc] class JDBCRDD(
     }
 
     val myLimitClause: String = dialect.getLimitClause(limit)
-    val myOffsetClause: String = dialect.getOffsetClause(offset)
 
-    val sqlText = options.prepareQuery +
-      s"SELECT $columnList FROM ${options.tableOrQuery} $myTableSampleClause" +
-      s" $myWhereClause $getGroupByClause $getOrderByClause $myLimitClause $myOffsetClause"
+    val sqlText = s"SELECT $columnList FROM ${options.tableOrQuery} $myTableSampleClause" +
+      s" $myWhereClause $getGroupByClause $getOrderByClause $myLimitClause"
     stmt = conn.prepareStatement(sqlText,
         ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
     stmt.setFetchSize(options.fetchSize)

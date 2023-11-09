@@ -32,8 +32,7 @@ case class ContinuousScanExec(
     @transient scan: Scan,
     @transient stream: ContinuousStream,
     @transient start: Offset,
-    keyGroupedPartitioning: Option[Seq[Expression]] = None,
-    ordering: Option[Seq[SortOrder]] = None) extends DataSourceV2ScanExecBase {
+    keyGroupedPartitioning: Option[Seq[Expression]] = None) extends DataSourceV2ScanExecBase {
 
   // TODO: unify the equal/hashCode implementation for all data source v2 query plans.
   override def equals(other: Any): Boolean = other match {
@@ -55,7 +54,7 @@ case class ContinuousScanExec(
       sparkContext.getLocalProperty(ContinuousExecution.EPOCH_COORDINATOR_ID_KEY),
       sparkContext.env)
       .askSync[Unit](SetReaderPartitions(partitions.size))
-    val inputRDD = new ContinuousDataSourceRDD(
+    new ContinuousDataSourceRDD(
       sparkContext,
       conf.continuousStreamingExecutorQueueSize,
       conf.continuousStreamingExecutorPollIntervalMs,
@@ -63,7 +62,5 @@ case class ContinuousScanExec(
       schema,
       readerFactory,
       customMetrics)
-    postDriverMetrics()
-    inputRDD
   }
 }

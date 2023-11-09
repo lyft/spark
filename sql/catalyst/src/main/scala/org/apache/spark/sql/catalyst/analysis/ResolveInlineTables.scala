@@ -50,12 +50,7 @@ object ResolveInlineTables extends Rule[LogicalPlan] with CastSupport with Alias
       val numCols = table.names.size
       table.rows.zipWithIndex.foreach { case (row, ri) =>
         if (row.size != numCols) {
-          table.failAnalysis(
-            errorClass = "_LEGACY_ERROR_TEMP_2305",
-            messageParameters = Map(
-              "numCols" -> numCols.toString,
-              "rowSize" -> row.size.toString,
-              "ri" -> ri.toString))
+          table.failAnalysis(s"expected $numCols columns but found ${row.size} columns in row $ri")
         }
       }
     }
@@ -72,9 +67,7 @@ object ResolveInlineTables extends Rule[LogicalPlan] with CastSupport with Alias
       row.foreach { e =>
         // Note that nondeterministic expressions are not supported since they are not foldable.
         if (!e.resolved || !trimAliases(e).foldable) {
-          e.failAnalysis(
-            errorClass = "_LEGACY_ERROR_TEMP_2304",
-            messageParameters = Map("sqlExpr" -> e.sql))
+          e.failAnalysis(s"cannot evaluate expression ${e.sql} in inline table definition")
         }
       }
     }
@@ -93,9 +86,7 @@ object ResolveInlineTables extends Rule[LogicalPlan] with CastSupport with Alias
     val fields = table.rows.transpose.zip(table.names).map { case (column, name) =>
       val inputTypes = column.map(_.dataType)
       val tpe = TypeCoercion.findWiderTypeWithoutStringPromotion(inputTypes).getOrElse {
-        table.failAnalysis(
-          errorClass = "_LEGACY_ERROR_TEMP_2303",
-          messageParameters = Map("name" -> name))
+        table.failAnalysis(s"incompatible types found in column $name for inline table")
       }
       StructField(name, tpe, nullable = column.exists(_.nullable))
     }
@@ -114,10 +105,7 @@ object ResolveInlineTables extends Rule[LogicalPlan] with CastSupport with Alias
           castedExpr.eval()
         } catch {
           case NonFatal(ex) =>
-            table.failAnalysis(
-              errorClass = "_LEGACY_ERROR_TEMP_2331",
-              messageParameters = Map("sqlExpr" -> e.sql, "msg" -> ex.getMessage),
-              cause = ex)
+            table.failAnalysis(s"failed to evaluate expression ${e.sql}: ${ex.getMessage}", ex)
         }
       })
     }

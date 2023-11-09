@@ -24,7 +24,7 @@ import java.time.{Duration, LocalDateTime, Period}
 
 import scala.collection.JavaConverters._
 
-import org.apache.hadoop.hive.ql.io.sarg.{PredicateLeaf, SearchArgument, SearchArgumentImpl}
+import org.apache.hadoop.hive.ql.io.sarg.{PredicateLeaf, SearchArgument}
 import org.apache.hadoop.hive.ql.io.sarg.SearchArgumentFactory.newBuilder
 
 import org.apache.spark.{SparkConf, SparkException}
@@ -38,12 +38,10 @@ import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types._
-import org.apache.spark.tags.ExtendedSQLTest
 
 /**
  * A test suite that tests Apache ORC filter API based filter pushdown optimization.
  */
-@ExtendedSQLTest
 class OrcFilterSuite extends OrcTest with SharedSparkSession {
 
   override protected def sparkConf: SparkConf =
@@ -61,12 +59,11 @@ class OrcFilterSuite extends OrcTest with SharedSparkSession {
       .where(Column(predicate))
 
     query.queryExecution.optimizedPlan match {
-      case PhysicalOperation(_, filters, DataSourceV2ScanRelation(_, o: OrcScan, _, _, _)) =>
+      case PhysicalOperation(_, filters, DataSourceV2ScanRelation(_, o: OrcScan, _, _)) =>
         assert(filters.nonEmpty, "No filter is analyzed from the given query")
         assert(o.pushedFilters.nonEmpty, "No filter is pushed down")
         val maybeFilter = OrcFilters.createFilter(query.schema, o.pushedFilters)
-        assert(maybeFilter.isDefined, s"Couldn't generate filter predicate for " +
-          s"${o.pushedFilters.mkString("pushedFilters(", ", ", ")")}")
+        assert(maybeFilter.isDefined, s"Couldn't generate filter predicate for ${o.pushedFilters}")
         checker(maybeFilter.get)
 
       case _ =>
@@ -88,8 +85,7 @@ class OrcFilterSuite extends OrcTest with SharedSparkSession {
       (predicate: Predicate, stringExpr: String)
       (implicit df: DataFrame): Unit = {
     def checkLogicalOperator(filter: SearchArgument) = {
-      // HIVE-24458 changes toString output and provides `toOldString` for old style.
-      assert(filter.asInstanceOf[SearchArgumentImpl].toOldString == stringExpr)
+      assert(filter.toString == stringExpr)
     }
     checkFilterPredicate(df, predicate, checkLogicalOperator)
   }
@@ -546,7 +542,7 @@ class OrcFilterSuite extends OrcTest with SharedSparkSession {
       OrcFilters.createFilter(schema, Array(
         LessThan("a", 10),
         StringContains("b", "prefix")
-      )).get.asInstanceOf[SearchArgumentImpl].toOldString
+      )).get.toString
     }
 
     // The `LessThan` should be converted while the whole inner `And` shouldn't
@@ -557,7 +553,7 @@ class OrcFilterSuite extends OrcTest with SharedSparkSession {
           GreaterThan("a", 1),
           StringContains("b", "prefix")
         ))
-      )).get.asInstanceOf[SearchArgumentImpl].toOldString
+      )).get.toString
     }
 
     // Safely remove unsupported `StringContains` predicate and push down `LessThan`
@@ -567,7 +563,7 @@ class OrcFilterSuite extends OrcTest with SharedSparkSession {
           LessThan("a", 10),
           StringContains("b", "prefix")
         )
-      )).get.asInstanceOf[SearchArgumentImpl].toOldString
+      )).get.toString
     }
 
     // Safely remove unsupported `StringContains` predicate, push down `LessThan` and `GreaterThan`.
@@ -581,7 +577,7 @@ class OrcFilterSuite extends OrcTest with SharedSparkSession {
           ),
           GreaterThan("a", 1)
         )
-      )).get.asInstanceOf[SearchArgumentImpl].toOldString
+      )).get.toString
     }
   }
 
@@ -604,7 +600,7 @@ class OrcFilterSuite extends OrcTest with SharedSparkSession {
             LessThan("a", 1)
           )
         )
-      )).get.asInstanceOf[SearchArgumentImpl].toOldString
+      )).get.toString
     }
 
     assertResult("leaf-0 = (LESS_THAN_EQUALS a 10), leaf-1 = (LESS_THAN a 1)," +
@@ -620,7 +616,7 @@ class OrcFilterSuite extends OrcTest with SharedSparkSession {
             LessThan("a", 1)
           )
         )
-      )).get.asInstanceOf[SearchArgumentImpl].toOldString
+      )).get.toString
     }
 
     assert(OrcFilters.createFilter(schema, Array(
@@ -642,7 +638,7 @@ class OrcFilterSuite extends OrcTest with SharedSparkSession {
         LessThan(
           "a",
           new java.math.BigDecimal(3.14, MathContext.DECIMAL64).setScale(2)))
-      ).get.asInstanceOf[SearchArgumentImpl].toOldString
+      ).get.toString
     }
   }
 
@@ -677,21 +673,11 @@ class OrcFilterSuite extends OrcTest with SharedSparkSession {
 
         // Exception thrown for ambiguous case.
         withSQLConf(SQLConf.CASE_SENSITIVE.key -> "false") {
-          checkError(
-            exception = intercept[AnalysisException] {
-              sql(s"select a from $tableName where a < 0").collect()
-            },
-            errorClass = "AMBIGUOUS_REFERENCE",
-            parameters = Map(
-              "name" -> "`a`",
-              "referenceNames" -> ("[`spark_catalog`.`default`.`spark_32622`.`a`, " +
-                "`spark_catalog`.`default`.`spark_32622`.`a`]")),
-            context = ExpectedContext(
-              fragment = "a",
-              start = 32,
-              stop = 32
-            )
-          )
+          val e = intercept[AnalysisException] {
+            sql(s"select a from $tableName where a < 0").collect()
+          }
+          assert(e.getMessage.contains(
+            "Reference 'a' is ambiguous"))
         }
       }
 

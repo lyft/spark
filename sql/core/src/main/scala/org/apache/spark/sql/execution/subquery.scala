@@ -20,14 +20,13 @@ package org.apache.spark.sql.execution
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.{expressions, InternalRow}
-import org.apache.spark.sql.catalyst.expressions.{CreateNamedStruct, Expression, ExprId, InSet, ListQuery, Literal, PlanExpression, Predicate, SupportQueryContext}
+import org.apache.spark.sql.catalyst.expressions.{CreateNamedStruct, Expression, ExprId, InSet, ListQuery, Literal, PlanExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, ExprCode}
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.catalyst.trees.{LeafLike, SQLQueryContext, UnaryLike}
+import org.apache.spark.sql.catalyst.trees.{LeafLike, UnaryLike}
 import org.apache.spark.sql.catalyst.trees.TreePattern._
-import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.DataType
+import org.apache.spark.sql.types.{BooleanType, DataType}
 
 /**
  * The base class for subquery that is used in SparkPlan.
@@ -62,13 +61,12 @@ object ExecSubqueryExpression {
 case class ScalarSubquery(
     plan: BaseSubqueryExec,
     exprId: ExprId)
-  extends ExecSubqueryExpression with LeafLike[Expression] with SupportQueryContext {
+  extends ExecSubqueryExpression with LeafLike[Expression] {
 
   override def dataType: DataType = plan.schema.fields.head.dataType
   override def nullable: Boolean = true
   override def toString: String = plan.simpleString(SQLConf.get.maxToStringFields)
   override def withNewPlan(query: BaseSubqueryExec): ScalarSubquery = copy(plan = query)
-  def initQueryContext(): Option[SQLQueryContext] = Some(origin.context)
 
   override lazy val canonicalized: Expression = {
     ScalarSubquery(plan.canonicalized.asInstanceOf[BaseSubqueryExec], ExprId(0))
@@ -81,7 +79,9 @@ case class ScalarSubquery(
   def updateResult(): Unit = {
     val rows = plan.executeCollect()
     if (rows.length > 1) {
-      throw QueryExecutionErrors.multipleRowSubqueryError(getContextOrNull())
+      // TODO(SPARK-39167): Throw an exception w/ an error class for multiple rows from a subquery
+      throw new IllegalStateException(
+        s"more than one row returned by a subquery used as an expression:\n$plan")
     }
     if (rows.length == 1) {
       assert(rows(0).numFields == 1,
@@ -116,10 +116,11 @@ case class InSubqueryExec(
     shouldBroadcast: Boolean = false,
     private var resultBroadcast: Broadcast[Array[Any]] = null,
     @transient private var result: Array[Any] = null)
-  extends ExecSubqueryExpression with UnaryLike[Expression] with Predicate {
+  extends ExecSubqueryExpression with UnaryLike[Expression] {
 
   @transient private lazy val inSet = InSet(child, result.toSet)
 
+  override def dataType: DataType = BooleanType
   override def nullable: Boolean = child.nullable
   override def toString: String = s"$child IN ${plan.name}"
   override def withNewPlan(plan: BaseSubqueryExec): InSubqueryExec = copy(plan = plan)
@@ -182,7 +183,7 @@ case class PlanSubqueries(sparkSession: SparkSession) extends Rule[SparkPlan] {
           SubqueryExec.createForScalarSubquery(
             s"scalar-subquery#${subquery.exprId.id}", executedPlan),
           subquery.exprId)
-      case expressions.InSubquery(values, ListQuery(query, _, exprId, _, _, _)) =>
+      case expressions.InSubquery(values, ListQuery(query, _, exprId, _, _)) =>
         val expr = if (values.length == 1) {
           values.head
         } else {
@@ -193,8 +194,7 @@ case class PlanSubqueries(sparkSession: SparkSession) extends Rule[SparkPlan] {
           )
         }
         val executedPlan = QueryExecution.prepareExecutedPlan(sparkSession, query)
-        InSubqueryExec(expr, SubqueryExec(s"subquery#${exprId.id}", executedPlan),
-          exprId, shouldBroadcast = true)
+        InSubqueryExec(expr, SubqueryExec(s"subquery#${exprId.id}", executedPlan), exprId)
     }
   }
 }
