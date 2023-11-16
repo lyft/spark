@@ -14,23 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.spark.deploy.k8s.integrationtest
 
-<<<<<<<< HEAD:resource-managers/kubernetes/integration-tests/src/test/scala/org/apache/spark/deploy/k8s/integrationtest/YuniKornSuite.scala
-@YuniKornTag
-class YuniKornSuite extends KubernetesSuite {
-
-  override protected def setUpTest(): Unit = {
-    super.setUpTest()
-    val namespace = sparkAppConf.get("spark.kubernetes.namespace")
-    sparkAppConf
-      .set("spark.kubernetes.scheduler.name", "yunikorn")
-      .set("spark.kubernetes.driver.label.queue", "root." + namespace)
-      .set("spark.kubernetes.executor.label.queue", "root." + namespace)
-      .set("spark.kubernetes.driver.annotation.yunikorn.apache.org/app-id", "{{APP_ID}}")
-      .set("spark.kubernetes.executor.annotation.yunikorn.apache.org/app-id", "{{APP_ID}}")
-  }
-========
 package org.apache.spark.status.protobuf
 
 import java.util.{Map => JMap}
@@ -59,5 +43,4 @@ private[protobuf] object Utils {
       putAllFunc(input)
     }
   }
->>>>>>>> 17a8e67a6a03fd5a33f4ed078f8325665a0635aa:core/src/main/scala/org/apache/spark/status/protobuf/Utils.scala
 }

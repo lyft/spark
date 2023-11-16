@@ -15,39 +15,15 @@
  * limitations under the License.
  */
 
-<<<<<<<< HEAD:sql/catalyst/src/main/java/org/apache/spark/sql/connector/write/RowLevelOperationInfo.java
-package org.apache.spark.sql.connector.write;
-
-import org.apache.spark.annotation.Experimental;
-import org.apache.spark.sql.connector.write.RowLevelOperation.Command;
-import org.apache.spark.sql.util.CaseInsensitiveStringMap;
-
-/**
- * An interface with logical information for a row-level operation such as DELETE, UPDATE, MERGE.
-========
 package org.apache.spark.sql.connector.read.colstats;
 
 import org.apache.spark.annotation.Evolving;
 
 /**
  * An interface to represent a bin in an equi-height histogram.
->>>>>>>> 17a8e67a6a03fd5a33f4ed078f8325665a0635aa:sql/catalyst/src/main/java/org/apache/spark/sql/connector/read/colstats/HistogramBin.java
  *
  * @since 3.4.0
  */
-<<<<<<<< HEAD:sql/catalyst/src/main/java/org/apache/spark/sql/connector/write/RowLevelOperationInfo.java
-@Experimental
-public interface RowLevelOperationInfo {
-  /**
-   * Returns options that the user specified when performing the row-level operation.
-   */
-  CaseInsensitiveStringMap options();
-
-  /**
-   * Returns the row-level SQL command (e.g. DELETE, UPDATE, MERGE).
-   */
-  Command command();
-========
 @Evolving
 public interface HistogramBin {
   /**
@@ -64,5 +40,4 @@ public interface HistogramBin {
    * @return approximate number of distinct values in this bin
    */
   long ndv();
->>>>>>>> 17a8e67a6a03fd5a33f4ed078f8325665a0635aa:sql/catalyst/src/main/java/org/apache/spark/sql/connector/read/colstats/HistogramBin.java
 }
