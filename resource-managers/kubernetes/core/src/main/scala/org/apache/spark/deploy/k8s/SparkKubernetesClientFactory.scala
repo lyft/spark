@@ -21,7 +21,7 @@ import java.io.File
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.google.common.base.Charsets
 import com.google.common.io.Files
-import io.fabric8.kubernetes.client.{ConfigBuilder, DefaultKubernetesClient, KubernetesClient}
+import io.fabric8.kubernetes.client.{ConfigBuilder, KubernetesClient, KubernetesClientBuilder}
 import io.fabric8.kubernetes.client.Config.KUBERNETES_REQUEST_RETRY_BACKOFFLIMIT_SYSTEM_PROPERTY
 import io.fabric8.kubernetes.client.Config.autoConfigure
 import io.fabric8.kubernetes.client.okhttp.OkHttpClientFactory
@@ -88,7 +88,7 @@ private[spark] object SparkKubernetesClientFactory extends Logging {
     // Start from an auto-configured config with the desired context
     // Fabric 8 uses null to indicate that the users current context should be used so if no
     // explicit setting pass null
-    val config = new ConfigBuilder(autoConfigure(kubeContext.getOrElse(null)))
+    val config = new ConfigBuilder(autoConfigure(kubeContext.orNull))
       .withApiVersion("v1")
       .withMasterUrl(master)
       .withRequestTimeout(clientType.requestTimeout(sparkConf))
@@ -115,7 +115,10 @@ private[spark] object SparkKubernetesClientFactory extends Logging {
     }
     logDebug("Kubernetes client config: " +
       new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(config))
-    new DefaultKubernetesClient(factoryWithCustomDispatcher.createHttpClient(config), config)
+    new KubernetesClientBuilder()
+      .withHttpClientFactory(factoryWithCustomDispatcher)
+      .withConfig(config)
+      .build()
   }
 
   private implicit class OptionConfigurableConfigBuilder(val configBuilder: ConfigBuilder)

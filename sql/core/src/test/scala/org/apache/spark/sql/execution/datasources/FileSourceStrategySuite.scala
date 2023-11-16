@@ -26,10 +26,11 @@ import org.apache.hadoop.fs.{BlockLocation, FileStatus, Path, RawLocalFileSystem
 import org.apache.hadoop.mapreduce.Job
 
 import org.apache.spark.SparkException
+import org.apache.spark.paths.SparkPath.{fromUrlString => sp}
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
-import org.apache.spark.sql.catalyst.expressions.{Expression, ExpressionSet, PredicateHelper}
+import org.apache.spark.sql.catalyst.expressions.{Expression, ExpressionSet}
 import org.apache.spark.sql.catalyst.util
 import org.apache.spark.sql.execution.{DataSourceScanExec, FileSourceScanExec, SparkPlan}
 import org.apache.spark.sql.execution.datasources.v2.DataSourceV2ScanRelation
@@ -40,7 +41,7 @@ import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types.{IntegerType, LongType, StructField, StructType}
 import org.apache.spark.util.Utils
 
-class FileSourceStrategySuite extends QueryTest with SharedSparkSession with PredicateHelper {
+class FileSourceStrategySuite extends QueryTest with SharedSparkSession {
   import testImplicits._
 
   protected override def sparkConf = super.sparkConf.set("spark.default.parallelism", "1")
@@ -60,7 +61,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
           "file9" -> 1,
           "file10" -> 1))
 
-    checkScan(table.select(Symbol("c1"))) { partitions =>
+    checkScan(table.select($"c1")) { partitions =>
       // 10 one byte files should fit in a single partition with 10 files.
       assert(partitions.size == 1, "when checking partitions")
       assert(partitions.head.files.size == 10, "when checking partition 1")
@@ -83,7 +84,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
 
     withSQLConf(SQLConf.FILES_MAX_PARTITION_BYTES.key -> "11",
       SQLConf.FILES_OPEN_COST_IN_BYTES.key -> "1") {
-      checkScan(table.select(Symbol("c1"))) { partitions =>
+      checkScan(table.select($"c1")) { partitions =>
         // 5 byte files should be laid out [(5, 5), (5)]
         assert(partitions.size == 2, "when checking partitions")
         assert(partitions(0).files.size == 2, "when checking partition 1")
@@ -108,7 +109,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
 
     withSQLConf(SQLConf.FILES_MAX_PARTITION_BYTES.key -> "10",
       SQLConf.FILES_OPEN_COST_IN_BYTES.key -> "1") {
-      checkScan(table.select(Symbol("c1"))) { partitions =>
+      checkScan(table.select($"c1")) { partitions =>
         // Files should be laid out [(0-10), (10-15, 4)]
         assert(partitions.size == 2, "when checking partitions")
         assert(partitions(0).files.size == 1, "when checking partition 1")
@@ -141,7 +142,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
 
     withSQLConf(SQLConf.FILES_MAX_PARTITION_BYTES.key -> "4",
         SQLConf.FILES_OPEN_COST_IN_BYTES.key -> "1") {
-      checkScan(table.select(Symbol("c1"))) { partitions =>
+      checkScan(table.select($"c1")) { partitions =>
         // Files should be laid out [(file1), (file2, file3), (file4, file5), (file6)]
         assert(partitions.size == 4, "when checking partitions")
         assert(partitions(0).files.size == 1, "when checking partition 1")
@@ -283,10 +284,10 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
 
   test("Locality support for FileScanRDD") {
     val partition = FilePartition(0, Array(
-      PartitionedFile(InternalRow.empty, "fakePath0", 0, 10, Array("host0", "host1")),
-      PartitionedFile(InternalRow.empty, "fakePath0", 10, 20, Array("host1", "host2")),
-      PartitionedFile(InternalRow.empty, "fakePath1", 0, 5, Array("host3")),
-      PartitionedFile(InternalRow.empty, "fakePath2", 0, 5, Array("host4"))
+      PartitionedFile(InternalRow.empty, sp("fakePath0"), 0, 10, Array("host0", "host1")),
+      PartitionedFile(InternalRow.empty, sp("fakePath0"), 10, 20, Array("host1", "host2")),
+      PartitionedFile(InternalRow.empty, sp("fakePath1"), 0, 5, Array("host3")),
+      PartitionedFile(InternalRow.empty, sp("fakePath2"), 0, 5, Array("host4"))
     ))
 
     val fakeRDD = new FileScanRDD(
@@ -359,7 +360,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
       withSQLConf(
         SQLConf.FILES_MAX_PARTITION_BYTES.key -> "2",
         SQLConf.FILES_OPEN_COST_IN_BYTES.key -> "0") {
-        checkScan(table.select(Symbol("c1"))) { partitions =>
+        checkScan(table.select($"c1")) { partitions =>
           assert(partitions.size == 2)
           assert(partitions(0).files.size == 1)
           assert(partitions(1).files.size == 2)
@@ -375,7 +376,7 @@ class FileSourceStrategySuite extends QueryTest with SharedSparkSession with Pre
       withSQLConf(
         SQLConf.FILES_MAX_PARTITION_BYTES.key -> "2",
         SQLConf.FILES_OPEN_COST_IN_BYTES.key -> "0") {
-        checkScan(table.select(Symbol("c1"))) { partitions =>
+        checkScan(table.select($"c1")) { partitions =>
           assert(partitions.size == 3)
           assert(partitions(0).files.size == 1)
           assert(partitions(1).files.size == 2)

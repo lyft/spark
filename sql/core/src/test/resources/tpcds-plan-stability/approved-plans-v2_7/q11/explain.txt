@@ -15,11 +15,11 @@ TakeOrderedAndProject (71)
       :     :  :                 :  +- * BroadcastHashJoin Inner BuildRight (8)
       :     :  :                 :     :- * Filter (3)
       :     :  :                 :     :  +- * ColumnarToRow (2)
-      :     :  :                 :     :     +- Scan parquet default.customer (1)
+      :     :  :                 :     :     +- Scan parquet spark_catalog.default.customer (1)
       :     :  :                 :     +- BroadcastExchange (7)
       :     :  :                 :        +- * Filter (6)
       :     :  :                 :           +- * ColumnarToRow (5)
-      :     :  :                 :              +- Scan parquet default.store_sales (4)
+      :     :  :                 :              +- Scan parquet spark_catalog.default.store_sales (4)
       :     :  :                 +- ReusedExchange (10)
       :     :  +- BroadcastExchange (32)
       :     :     +- * HashAggregate (31)
@@ -31,11 +31,11 @@ TakeOrderedAndProject (71)
       :     :                    :  +- * BroadcastHashJoin Inner BuildRight (24)
       :     :                    :     :- * Filter (19)
       :     :                    :     :  +- * ColumnarToRow (18)
-      :     :                    :     :     +- Scan parquet default.customer (17)
+      :     :                    :     :     +- Scan parquet spark_catalog.default.customer (17)
       :     :                    :     +- BroadcastExchange (23)
       :     :                    :        +- * Filter (22)
       :     :                    :           +- * ColumnarToRow (21)
-      :     :                    :              +- Scan parquet default.store_sales (20)
+      :     :                    :              +- Scan parquet spark_catalog.default.store_sales (20)
       :     :                    +- ReusedExchange (26)
       :     +- BroadcastExchange (50)
       :        +- * Filter (49)
@@ -48,11 +48,11 @@ TakeOrderedAndProject (71)
       :                          :  +- * BroadcastHashJoin Inner BuildRight (41)
       :                          :     :- * Filter (36)
       :                          :     :  +- * ColumnarToRow (35)
-      :                          :     :     +- Scan parquet default.customer (34)
+      :                          :     :     +- Scan parquet spark_catalog.default.customer (34)
       :                          :     +- BroadcastExchange (40)
       :                          :        +- * Filter (39)
       :                          :           +- * ColumnarToRow (38)
-      :                          :              +- Scan parquet default.web_sales (37)
+      :                          :              +- Scan parquet spark_catalog.default.web_sales (37)
       :                          +- ReusedExchange (43)
       +- BroadcastExchange (68)
          +- * HashAggregate (67)
@@ -64,15 +64,15 @@ TakeOrderedAndProject (71)
                         :  +- * BroadcastHashJoin Inner BuildRight (60)
                         :     :- * Filter (55)
                         :     :  +- * ColumnarToRow (54)
-                        :     :     +- Scan parquet default.customer (53)
+                        :     :     +- Scan parquet spark_catalog.default.customer (53)
                         :     +- BroadcastExchange (59)
                         :        +- * Filter (58)
                         :           +- * ColumnarToRow (57)
-                        :              +- Scan parquet default.web_sales (56)
+                        :              +- Scan parquet spark_catalog.default.web_sales (56)
                         +- ReusedExchange (62)
 
 
-(1) Scan parquet default.customer
+(1) Scan parquet spark_catalog.default.customer
 Output [8]: [c_customer_sk#1, c_customer_id#2, c_first_name#3, c_last_name#4, c_preferred_cust_flag#5, c_birth_country#6, c_login#7, c_email_address#8]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/customer]
@@ -86,7 +86,7 @@ Input [8]: [c_customer_sk#1, c_customer_id#2, c_first_name#3, c_last_name#4, c_p
 Input [8]: [c_customer_sk#1, c_customer_id#2, c_first_name#3, c_last_name#4, c_preferred_cust_flag#5, c_birth_country#6, c_login#7, c_email_address#8]
 Condition : (isnotnull(c_customer_sk#1) AND isnotnull(c_customer_id#2))
 
-(4) Scan parquet default.store_sales
+(4) Scan parquet spark_catalog.default.store_sales
 Output [4]: [ss_customer_sk#9, ss_ext_discount_amt#10, ss_ext_list_price#11, ss_sold_date_sk#12]
 Batched: true
 Location: InMemoryFileIndex []
@@ -108,6 +108,7 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, false] as bigint)
 (8) BroadcastHashJoin [codegen id : 3]
 Left keys [1]: [c_customer_sk#1]
 Right keys [1]: [ss_customer_sk#9]
+Join type: Inner
 Join condition: None
 
 (9) Project [codegen id : 3]
@@ -120,6 +121,7 @@ Output [2]: [d_date_sk#14, d_year#15]
 (11) BroadcastHashJoin [codegen id : 3]
 Left keys [1]: [ss_sold_date_sk#12]
 Right keys [1]: [d_date_sk#14]
+Join type: Inner
 Join condition: None
 
 (12) Project [codegen id : 3]
@@ -129,7 +131,7 @@ Input [12]: [c_customer_id#2, c_first_name#3, c_last_name#4, c_preferred_cust_fl
 (13) HashAggregate [codegen id : 3]
 Input [10]: [c_customer_id#2, c_first_name#3, c_last_name#4, c_preferred_cust_flag#5, c_birth_country#6, c_login#7, c_email_address#8, ss_ext_discount_amt#10, ss_ext_list_price#11, d_year#15]
 Keys [8]: [c_customer_id#2, c_first_name#3, c_last_name#4, d_year#15, c_preferred_cust_flag#5, c_birth_country#6, c_login#7, c_email_address#8]
-Functions [1]: [partial_sum(UnscaledValue(CheckOverflow((promote_precision(cast(ss_ext_list_price#11 as decimal(8,2))) - promote_precision(cast(ss_ext_discount_amt#10 as decimal(8,2)))), DecimalType(8,2))))]
+Functions [1]: [partial_sum(UnscaledValue((ss_ext_list_price#11 - ss_ext_discount_amt#10)))]
 Aggregate Attributes [1]: [sum#16]
 Results [9]: [c_customer_id#2, c_first_name#3, c_last_name#4, d_year#15, c_preferred_cust_flag#5, c_birth_country#6, c_login#7, c_email_address#8, sum#17]
 
@@ -140,15 +142,15 @@ Arguments: hashpartitioning(c_customer_id#2, c_first_name#3, c_last_name#4, d_ye
 (15) HashAggregate [codegen id : 16]
 Input [9]: [c_customer_id#2, c_first_name#3, c_last_name#4, d_year#15, c_preferred_cust_flag#5, c_birth_country#6, c_login#7, c_email_address#8, sum#17]
 Keys [8]: [c_customer_id#2, c_first_name#3, c_last_name#4, d_year#15, c_preferred_cust_flag#5, c_birth_country#6, c_login#7, c_email_address#8]
-Functions [1]: [sum(UnscaledValue(CheckOverflow((promote_precision(cast(ss_ext_list_price#11 as decimal(8,2))) - promote_precision(cast(ss_ext_discount_amt#10 as decimal(8,2)))), DecimalType(8,2))))]
-Aggregate Attributes [1]: [sum(UnscaledValue(CheckOverflow((promote_precision(cast(ss_ext_list_price#11 as decimal(8,2))) - promote_precision(cast(ss_ext_discount_amt#10 as decimal(8,2)))), DecimalType(8,2))))#18]
-Results [2]: [c_customer_id#2 AS customer_id#19, MakeDecimal(sum(UnscaledValue(CheckOverflow((promote_precision(cast(ss_ext_list_price#11 as decimal(8,2))) - promote_precision(cast(ss_ext_discount_amt#10 as decimal(8,2)))), DecimalType(8,2))))#18,18,2) AS year_total#20]
+Functions [1]: [sum(UnscaledValue((ss_ext_list_price#11 - ss_ext_discount_amt#10)))]
+Aggregate Attributes [1]: [sum(UnscaledValue((ss_ext_list_price#11 - ss_ext_discount_amt#10)))#18]
+Results [2]: [c_customer_id#2 AS customer_id#19, MakeDecimal(sum(UnscaledValue((ss_ext_list_price#11 - ss_ext_discount_amt#10)))#18,18,2) AS year_total#20]
 
 (16) Filter [codegen id : 16]
 Input [2]: [customer_id#19, year_total#20]
 Condition : (isnotnull(year_total#20) AND (year_total#20 > 0.00))
 
-(17) Scan parquet default.customer
+(17) Scan parquet spark_catalog.default.customer
 Output [8]: [c_customer_sk#21, c_customer_id#22, c_first_name#23, c_last_name#24, c_preferred_cust_flag#25, c_birth_country#26, c_login#27, c_email_address#28]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/customer]
@@ -162,7 +164,7 @@ Input [8]: [c_customer_sk#21, c_customer_id#22, c_first_name#23, c_last_name#24,
 Input [8]: [c_customer_sk#21, c_customer_id#22, c_first_name#23, c_last_name#24, c_preferred_cust_flag#25, c_birth_country#26, c_login#27, c_email_address#28]
 Condition : (isnotnull(c_customer_sk#21) AND isnotnull(c_customer_id#22))
 
-(20) Scan parquet default.store_sales
+(20) Scan parquet spark_catalog.default.store_sales
 Output [4]: [ss_customer_sk#29, ss_ext_discount_amt#30, ss_ext_list_price#31, ss_sold_date_sk#32]
 Batched: true
 Location: InMemoryFileIndex []
@@ -184,6 +186,7 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, false] as bigint)
 (24) BroadcastHashJoin [codegen id : 6]
 Left keys [1]: [c_customer_sk#21]
 Right keys [1]: [ss_customer_sk#29]
+Join type: Inner
 Join condition: None
 
 (25) Project [codegen id : 6]
@@ -196,6 +199,7 @@ Output [2]: [d_date_sk#34, d_year#35]
 (27) BroadcastHashJoin [codegen id : 6]
 Left keys [1]: [ss_sold_date_sk#32]
 Right keys [1]: [d_date_sk#34]
+Join type: Inner
 Join condition: None
 
 (28) Project [codegen id : 6]
@@ -205,7 +209,7 @@ Input [12]: [c_customer_id#22, c_first_name#23, c_last_name#24, c_preferred_cust
 (29) HashAggregate [codegen id : 6]
 Input [10]: [c_customer_id#22, c_first_name#23, c_last_name#24, c_preferred_cust_flag#25, c_birth_country#26, c_login#27, c_email_address#28, ss_ext_discount_amt#30, ss_ext_list_price#31, d_year#35]
 Keys [8]: [c_customer_id#22, c_first_name#23, c_last_name#24, d_year#35, c_preferred_cust_flag#25, c_birth_country#26, c_login#27, c_email_address#28]
-Functions [1]: [partial_sum(UnscaledValue(CheckOverflow((promote_precision(cast(ss_ext_list_price#31 as decimal(8,2))) - promote_precision(cast(ss_ext_discount_amt#30 as decimal(8,2)))), DecimalType(8,2))))]
+Functions [1]: [partial_sum(UnscaledValue((ss_ext_list_price#31 - ss_ext_discount_amt#30)))]
 Aggregate Attributes [1]: [sum#36]
 Results [9]: [c_customer_id#22, c_first_name#23, c_last_name#24, d_year#35, c_preferred_cust_flag#25, c_birth_country#26, c_login#27, c_email_address#28, sum#37]
 
@@ -216,9 +220,9 @@ Arguments: hashpartitioning(c_customer_id#22, c_first_name#23, c_last_name#24, d
 (31) HashAggregate [codegen id : 7]
 Input [9]: [c_customer_id#22, c_first_name#23, c_last_name#24, d_year#35, c_preferred_cust_flag#25, c_birth_country#26, c_login#27, c_email_address#28, sum#37]
 Keys [8]: [c_customer_id#22, c_first_name#23, c_last_name#24, d_year#35, c_preferred_cust_flag#25, c_birth_country#26, c_login#27, c_email_address#28]
-Functions [1]: [sum(UnscaledValue(CheckOverflow((promote_precision(cast(ss_ext_list_price#31 as decimal(8,2))) - promote_precision(cast(ss_ext_discount_amt#30 as decimal(8,2)))), DecimalType(8,2))))]
-Aggregate Attributes [1]: [sum(UnscaledValue(CheckOverflow((promote_precision(cast(ss_ext_list_price#31 as decimal(8,2))) - promote_precision(cast(ss_ext_discount_amt#30 as decimal(8,2)))), DecimalType(8,2))))#18]
-Results [5]: [c_customer_id#22 AS customer_id#38, c_first_name#23 AS customer_first_name#39, c_last_name#24 AS customer_last_name#40, c_email_address#28 AS customer_email_address#41, MakeDecimal(sum(UnscaledValue(CheckOverflow((promote_precision(cast(ss_ext_list_price#31 as decimal(8,2))) - promote_precision(cast(ss_ext_discount_amt#30 as decimal(8,2)))), DecimalType(8,2))))#18,18,2) AS year_total#42]
+Functions [1]: [sum(UnscaledValue((ss_ext_list_price#31 - ss_ext_discount_amt#30)))]
+Aggregate Attributes [1]: [sum(UnscaledValue((ss_ext_list_price#31 - ss_ext_discount_amt#30)))#18]
+Results [5]: [c_customer_id#22 AS customer_id#38, c_first_name#23 AS customer_first_name#39, c_last_name#24 AS customer_last_name#40, c_email_address#28 AS customer_email_address#41, MakeDecimal(sum(UnscaledValue((ss_ext_list_price#31 - ss_ext_discount_amt#30)))#18,18,2) AS year_total#42]
 
 (32) BroadcastExchange
 Input [5]: [customer_id#38, customer_first_name#39, customer_last_name#40, customer_email_address#41, year_total#42]
@@ -227,9 +231,10 @@ Arguments: HashedRelationBroadcastMode(List(input[0, string, true]),false), [pla
 (33) BroadcastHashJoin [codegen id : 16]
 Left keys [1]: [customer_id#19]
 Right keys [1]: [customer_id#38]
+Join type: Inner
 Join condition: None
 
-(34) Scan parquet default.customer
+(34) Scan parquet spark_catalog.default.customer
 Output [8]: [c_customer_sk#43, c_customer_id#44, c_first_name#45, c_last_name#46, c_preferred_cust_flag#47, c_birth_country#48, c_login#49, c_email_address#50]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/customer]
@@ -243,7 +248,7 @@ Input [8]: [c_customer_sk#43, c_customer_id#44, c_first_name#45, c_last_name#46,
 Input [8]: [c_customer_sk#43, c_customer_id#44, c_first_name#45, c_last_name#46, c_preferred_cust_flag#47, c_birth_country#48, c_login#49, c_email_address#50]
 Condition : (isnotnull(c_customer_sk#43) AND isnotnull(c_customer_id#44))
 
-(37) Scan parquet default.web_sales
+(37) Scan parquet spark_catalog.default.web_sales
 Output [4]: [ws_bill_customer_sk#51, ws_ext_discount_amt#52, ws_ext_list_price#53, ws_sold_date_sk#54]
 Batched: true
 Location: InMemoryFileIndex []
@@ -265,6 +270,7 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, false] as bigint)
 (41) BroadcastHashJoin [codegen id : 10]
 Left keys [1]: [c_customer_sk#43]
 Right keys [1]: [ws_bill_customer_sk#51]
+Join type: Inner
 Join condition: None
 
 (42) Project [codegen id : 10]
@@ -277,6 +283,7 @@ Output [2]: [d_date_sk#55, d_year#56]
 (44) BroadcastHashJoin [codegen id : 10]
 Left keys [1]: [ws_sold_date_sk#54]
 Right keys [1]: [d_date_sk#55]
+Join type: Inner
 Join condition: None
 
 (45) Project [codegen id : 10]
@@ -286,7 +293,7 @@ Input [12]: [c_customer_id#44, c_first_name#45, c_last_name#46, c_preferred_cust
 (46) HashAggregate [codegen id : 10]
 Input [10]: [c_customer_id#44, c_first_name#45, c_last_name#46, c_preferred_cust_flag#47, c_birth_country#48, c_login#49, c_email_address#50, ws_ext_discount_amt#52, ws_ext_list_price#53, d_year#56]
 Keys [8]: [c_customer_id#44, c_first_name#45, c_last_name#46, c_preferred_cust_flag#47, c_birth_country#48, c_login#49, c_email_address#50, d_year#56]
-Functions [1]: [partial_sum(UnscaledValue(CheckOverflow((promote_precision(cast(ws_ext_list_price#53 as decimal(8,2))) - promote_precision(cast(ws_ext_discount_amt#52 as decimal(8,2)))), DecimalType(8,2))))]
+Functions [1]: [partial_sum(UnscaledValue((ws_ext_list_price#53 - ws_ext_discount_amt#52)))]
 Aggregate Attributes [1]: [sum#57]
 Results [9]: [c_customer_id#44, c_first_name#45, c_last_name#46, c_preferred_cust_flag#47, c_birth_country#48, c_login#49, c_email_address#50, d_year#56, sum#58]
 
@@ -297,9 +304,9 @@ Arguments: hashpartitioning(c_customer_id#44, c_first_name#45, c_last_name#46, c
 (48) HashAggregate [codegen id : 11]
 Input [9]: [c_customer_id#44, c_first_name#45, c_last_name#46, c_preferred_cust_flag#47, c_birth_country#48, c_login#49, c_email_address#50, d_year#56, sum#58]
 Keys [8]: [c_customer_id#44, c_first_name#45, c_last_name#46, c_preferred_cust_flag#47, c_birth_country#48, c_login#49, c_email_address#50, d_year#56]
-Functions [1]: [sum(UnscaledValue(CheckOverflow((promote_precision(cast(ws_ext_list_price#53 as decimal(8,2))) - promote_precision(cast(ws_ext_discount_amt#52 as decimal(8,2)))), DecimalType(8,2))))]
-Aggregate Attributes [1]: [sum(UnscaledValue(CheckOverflow((promote_precision(cast(ws_ext_list_price#53 as decimal(8,2))) - promote_precision(cast(ws_ext_discount_amt#52 as decimal(8,2)))), DecimalType(8,2))))#59]
-Results [2]: [c_customer_id#44 AS customer_id#60, MakeDecimal(sum(UnscaledValue(CheckOverflow((promote_precision(cast(ws_ext_list_price#53 as decimal(8,2))) - promote_precision(cast(ws_ext_discount_amt#52 as decimal(8,2)))), DecimalType(8,2))))#59,18,2) AS year_total#61]
+Functions [1]: [sum(UnscaledValue((ws_ext_list_price#53 - ws_ext_discount_amt#52)))]
+Aggregate Attributes [1]: [sum(UnscaledValue((ws_ext_list_price#53 - ws_ext_discount_amt#52)))#59]
+Results [2]: [c_customer_id#44 AS customer_id#60, MakeDecimal(sum(UnscaledValue((ws_ext_list_price#53 - ws_ext_discount_amt#52)))#59,18,2) AS year_total#61]
 
 (49) Filter [codegen id : 11]
 Input [2]: [customer_id#60, year_total#61]
@@ -312,13 +319,14 @@ Arguments: HashedRelationBroadcastMode(List(input[0, string, true]),false), [pla
 (51) BroadcastHashJoin [codegen id : 16]
 Left keys [1]: [customer_id#19]
 Right keys [1]: [customer_id#60]
+Join type: Inner
 Join condition: None
 
 (52) Project [codegen id : 16]
 Output [8]: [customer_id#19, year_total#20, customer_id#38, customer_first_name#39, customer_last_name#40, customer_email_address#41, year_total#42, year_total#61]
 Input [9]: [customer_id#19, year_total#20, customer_id#38, customer_first_name#39, customer_last_name#40, customer_email_address#41, year_total#42, customer_id#60, year_total#61]
 
-(53) Scan parquet default.customer
+(53) Scan parquet spark_catalog.default.customer
 Output [8]: [c_customer_sk#62, c_customer_id#63, c_first_name#64, c_last_name#65, c_preferred_cust_flag#66, c_birth_country#67, c_login#68, c_email_address#69]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/customer]
@@ -332,7 +340,7 @@ Input [8]: [c_customer_sk#62, c_customer_id#63, c_first_name#64, c_last_name#65,
 Input [8]: [c_customer_sk#62, c_customer_id#63, c_first_name#64, c_last_name#65, c_preferred_cust_flag#66, c_birth_country#67, c_login#68, c_email_address#69]
 Condition : (isnotnull(c_customer_sk#62) AND isnotnull(c_customer_id#63))
 
-(56) Scan parquet default.web_sales
+(56) Scan parquet spark_catalog.default.web_sales
 Output [4]: [ws_bill_customer_sk#70, ws_ext_discount_amt#71, ws_ext_list_price#72, ws_sold_date_sk#73]
 Batched: true
 Location: InMemoryFileIndex []
@@ -354,6 +362,7 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, false] as bigint)
 (60) BroadcastHashJoin [codegen id : 14]
 Left keys [1]: [c_customer_sk#62]
 Right keys [1]: [ws_bill_customer_sk#70]
+Join type: Inner
 Join condition: None
 
 (61) Project [codegen id : 14]
@@ -366,6 +375,7 @@ Output [2]: [d_date_sk#74, d_year#75]
 (63) BroadcastHashJoin [codegen id : 14]
 Left keys [1]: [ws_sold_date_sk#73]
 Right keys [1]: [d_date_sk#74]
+Join type: Inner
 Join condition: None
 
 (64) Project [codegen id : 14]
@@ -375,7 +385,7 @@ Input [12]: [c_customer_id#63, c_first_name#64, c_last_name#65, c_preferred_cust
 (65) HashAggregate [codegen id : 14]
 Input [10]: [c_customer_id#63, c_first_name#64, c_last_name#65, c_preferred_cust_flag#66, c_birth_country#67, c_login#68, c_email_address#69, ws_ext_discount_amt#71, ws_ext_list_price#72, d_year#75]
 Keys [8]: [c_customer_id#63, c_first_name#64, c_last_name#65, c_preferred_cust_flag#66, c_birth_country#67, c_login#68, c_email_address#69, d_year#75]
-Functions [1]: [partial_sum(UnscaledValue(CheckOverflow((promote_precision(cast(ws_ext_list_price#72 as decimal(8,2))) - promote_precision(cast(ws_ext_discount_amt#71 as decimal(8,2)))), DecimalType(8,2))))]
+Functions [1]: [partial_sum(UnscaledValue((ws_ext_list_price#72 - ws_ext_discount_amt#71)))]
 Aggregate Attributes [1]: [sum#76]
 Results [9]: [c_customer_id#63, c_first_name#64, c_last_name#65, c_preferred_cust_flag#66, c_birth_country#67, c_login#68, c_email_address#69, d_year#75, sum#77]
 
@@ -386,9 +396,9 @@ Arguments: hashpartitioning(c_customer_id#63, c_first_name#64, c_last_name#65, c
 (67) HashAggregate [codegen id : 15]
 Input [9]: [c_customer_id#63, c_first_name#64, c_last_name#65, c_preferred_cust_flag#66, c_birth_country#67, c_login#68, c_email_address#69, d_year#75, sum#77]
 Keys [8]: [c_customer_id#63, c_first_name#64, c_last_name#65, c_preferred_cust_flag#66, c_birth_country#67, c_login#68, c_email_address#69, d_year#75]
-Functions [1]: [sum(UnscaledValue(CheckOverflow((promote_precision(cast(ws_ext_list_price#72 as decimal(8,2))) - promote_precision(cast(ws_ext_discount_amt#71 as decimal(8,2)))), DecimalType(8,2))))]
-Aggregate Attributes [1]: [sum(UnscaledValue(CheckOverflow((promote_precision(cast(ws_ext_list_price#72 as decimal(8,2))) - promote_precision(cast(ws_ext_discount_amt#71 as decimal(8,2)))), DecimalType(8,2))))#59]
-Results [2]: [c_customer_id#63 AS customer_id#78, MakeDecimal(sum(UnscaledValue(CheckOverflow((promote_precision(cast(ws_ext_list_price#72 as decimal(8,2))) - promote_precision(cast(ws_ext_discount_amt#71 as decimal(8,2)))), DecimalType(8,2))))#59,18,2) AS year_total#79]
+Functions [1]: [sum(UnscaledValue((ws_ext_list_price#72 - ws_ext_discount_amt#71)))]
+Aggregate Attributes [1]: [sum(UnscaledValue((ws_ext_list_price#72 - ws_ext_discount_amt#71)))#59]
+Results [2]: [c_customer_id#63 AS customer_id#78, MakeDecimal(sum(UnscaledValue((ws_ext_list_price#72 - ws_ext_discount_amt#71)))#59,18,2) AS year_total#79]
 
 (68) BroadcastExchange
 Input [2]: [customer_id#78, year_total#79]
@@ -397,7 +407,8 @@ Arguments: HashedRelationBroadcastMode(List(input[0, string, true]),false), [pla
 (69) BroadcastHashJoin [codegen id : 16]
 Left keys [1]: [customer_id#19]
 Right keys [1]: [customer_id#78]
-Join condition: (CASE WHEN (year_total#61 > 0.00) THEN CheckOverflow((promote_precision(year_total#79) / promote_precision(year_total#61)), DecimalType(38,20)) ELSE 0E-20 END > CASE WHEN (year_total#20 > 0.00) THEN CheckOverflow((promote_precision(year_total#42) / promote_precision(year_total#20)), DecimalType(38,20)) ELSE 0E-20 END)
+Join type: Inner
+Join condition: (CASE WHEN (year_total#61 > 0.00) THEN (year_total#79 / year_total#61) ELSE 0E-20 END > CASE WHEN (year_total#20 > 0.00) THEN (year_total#42 / year_total#20) ELSE 0E-20 END)
 
 (70) Project [codegen id : 16]
 Output [4]: [customer_id#38, customer_first_name#39, customer_last_name#40, customer_email_address#41]
@@ -413,10 +424,10 @@ Subquery:1 Hosting operator id = 4 Hosting Expression = ss_sold_date_sk#12 IN dy
 BroadcastExchange (75)
 +- * Filter (74)
    +- * ColumnarToRow (73)
-      +- Scan parquet default.date_dim (72)
+      +- Scan parquet spark_catalog.default.date_dim (72)
 
 
-(72) Scan parquet default.date_dim
+(72) Scan parquet spark_catalog.default.date_dim
 Output [2]: [d_date_sk#14, d_year#15]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/date_dim]
@@ -438,10 +449,10 @@ Subquery:2 Hosting operator id = 20 Hosting Expression = ss_sold_date_sk#32 IN d
 BroadcastExchange (79)
 +- * Filter (78)
    +- * ColumnarToRow (77)
-      +- Scan parquet default.date_dim (76)
+      +- Scan parquet spark_catalog.default.date_dim (76)
 
 
-(76) Scan parquet default.date_dim
+(76) Scan parquet spark_catalog.default.date_dim
 Output [2]: [d_date_sk#34, d_year#35]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/date_dim]

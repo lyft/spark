@@ -1232,6 +1232,143 @@ local partition, doing partial aggregation can still increase the performance si
 
 You can enable `spark.sql.streaming.sessionWindow.merge.sessions.in.local.partition` to indicate Spark to perform partial aggregation.
 
+#### Representation of the time for time window
+
+In some use cases, it is necessary to extract the representation of the time for time window, to apply operations requiring timestamp to the time windowed data.
+One example is chained time window aggregations, where users want to define another time window against the time window. Say, someone wants to aggregate 5 minutes time windows as 1 hour tumble time window.
+
+There are two ways to achieve this, like below:
+
+1. Use `window_time` SQL function with time window column as parameter
+2. Use `window` SQL function with time window column as parameter
+
+`window_time` function will produce a timestamp which represents the time for time window.
+User can pass the result to the parameter of `window` function (or anywhere requiring timestamp) to perform operation(s) with time window which requires timestamp.
+
+<div class="codetabs">
+<div data-lang="scala"  markdown="1">
+
+{% highlight scala %}
+import spark.implicits._
+
+val words = ... // streaming DataFrame of schema { timestamp: Timestamp, word: String }
+
+// Group the data by window and word and compute the count of each group
+val windowedCounts = words.groupBy(
+  window($"timestamp", "10 minutes", "5 minutes"),
+  $"word"
+).count()
+
+// Group the windowed data by another window and word and compute the count of each group
+val anotherWindowedCounts = windowedCounts.groupBy(
+  window(window_time($"window"), "1 hour"),
+  $"word"
+).count()
+{% endhighlight %}
+
+</div>
+<div data-lang="java"  markdown="1">
+
+{% highlight java %}
+Dataset<Row> words = ... // streaming DataFrame of schema { timestamp: Timestamp, word: String }
+
+// Group the data by window and word and compute the count of each group
+Dataset<Row> windowedCounts = words.groupBy(
+  functions.window(words.col("timestamp"), "10 minutes", "5 minutes"),
+  words.col("word")
+).count();
+
+// Group the windowed data by another window and word and compute the count of each group
+Dataset<Row> anotherWindowedCounts = windowedCounts.groupBy(
+  functions.window(functions.window_time("window"), "1 hour"),
+  windowedCounts.col("word")
+).count();
+{% endhighlight %}
+
+</div>
+<div data-lang="python"  markdown="1">
+{% highlight python %}
+words = ...  # streaming DataFrame of schema { timestamp: Timestamp, word: String }
+
+# Group the data by window and word and compute the count of each group
+windowedCounts = words.groupBy(
+    window(words.timestamp, "10 minutes", "5 minutes"),
+    words.word
+).count()
+
+# Group the windowed data by another window and word and compute the count of each group
+anotherWindowedCounts = windowedCounts.groupBy(
+    window(window_time(windowedCounts.window), "1 hour"),
+    windowedCounts.word
+).count()
+{% endhighlight %}
+
+</div>
+</div>
+
+`window` function does not only take timestamp column, but also take the time window column. This is specifically useful for cases where users want to apply chained time window aggregations.
+
+<div class="codetabs">
+<div data-lang="scala"  markdown="1">
+
+{% highlight scala %}
+import spark.implicits._
+
+val words = ... // streaming DataFrame of schema { timestamp: Timestamp, word: String }
+
+// Group the data by window and word and compute the count of each group
+val windowedCounts = words.groupBy(
+  window($"timestamp", "10 minutes", "5 minutes"),
+  $"word"
+).count()
+
+// Group the windowed data by another window and word and compute the count of each group
+val anotherWindowedCounts = windowedCounts.groupBy(
+  window($"window", "1 hour"),
+  $"word"
+).count()
+{% endhighlight %}
+
+</div>
+<div data-lang="java"  markdown="1">
+
+{% highlight java %}
+Dataset<Row> words = ... // streaming DataFrame of schema { timestamp: Timestamp, word: String }
+
+// Group the data by window and word and compute the count of each group
+Dataset<Row> windowedCounts = words.groupBy(
+  functions.window(words.col("timestamp"), "10 minutes", "5 minutes"),
+  words.col("word")
+).count();
+
+// Group the windowed data by another window and word and compute the count of each group
+Dataset<Row> anotherWindowedCounts = windowedCounts.groupBy(
+  functions.window("window", "1 hour"),
+  windowedCounts.col("word")
+).count();
+{% endhighlight %}
+
+</div>
+<div data-lang="python"  markdown="1">
+{% highlight python %}
+words = ...  # streaming DataFrame of schema { timestamp: Timestamp, word: String }
+
+# Group the data by window and word and compute the count of each group
+windowedCounts = words.groupBy(
+    window(words.timestamp, "10 minutes", "5 minutes"),
+    words.word
+).count()
+
+# Group the windowed data by another window and word and compute the count of each group
+anotherWindowedCounts = windowedCounts.groupBy(
+    window(windowedCounts.window, "1 hour"),
+    windowedCounts.word
+).count()
+{% endhighlight %}
+
+</div>
+</div>
+
 ##### Conditions for watermarking to clean aggregation state
 {:.no_toc}
 
@@ -1834,19 +1971,22 @@ Though Spark cannot check and force it, the state function should be implemented
 There are a few DataFrame/Dataset operations that are not supported with streaming DataFrames/Datasets. 
 Some of them are as follows.
  
-- Multiple streaming aggregations (i.e. a chain of aggregations on a streaming DF) are not yet supported on streaming Datasets.
-
 - Limit and take the first N rows are not supported on streaming Datasets.
 
 - Distinct operations on streaming Datasets are not supported.
-
-- Deduplication operation is not supported after aggregation on a streaming Datasets.
 
 - Sorting operations are supported on streaming Datasets only after an aggregation and in Complete Output Mode.
 
 - Few types of outer joins on streaming Datasets are not supported. See the
   <a href="#support-matrix-for-joins-in-streaming-queries">support matrix in the Join Operations section</a>
   for more details.
+
+- Chaining multiple stateful operations on streaming Datasets is not supported with Update and Complete mode.
+  - In addition, below operations followed by other stateful operation is not supported in Append mode.
+    - stream-stream time interval join (inner/outer)
+    - flatMapGroupsWithState
+  - A known workaround is to split your streaming query into multiple queries having a single stateful operation per each query,
+    and ensure end-to-end exactly once per query. Ensuring end-to-end exactly once for the last query is optional.
 
 In addition, there are some Dataset methods that will not work on streaming Datasets. They are actions that will immediately run queries and return results, which does not make sense on a streaming Dataset. Rather, those functionalities can be done by explicitly starting a streaming query (see the next section regarding that).
 
@@ -1862,35 +2002,6 @@ there are others which are fundamentally hard to implement on streaming data eff
 For example, sorting on the input stream is not supported, as it requires keeping 
 track of all the data received in the stream. This is therefore fundamentally hard to execute 
 efficiently.
-
-### Limitation of global watermark
-
-In Append mode, if a stateful operation emits rows older than current watermark plus allowed late record delay,
-they will be "late rows" in downstream stateful operations (as Spark uses global watermark). Note that these rows may be discarded.
-This is a limitation of a global watermark, and it could potentially cause a correctness issue.
-
-Spark will check the logical plan of query and log a warning when Spark detects such a pattern.
-
-Any of the stateful operation(s) after any of below stateful operations can have this issue:
-
-* streaming aggregation in Append mode
-* stream-stream outer join
-* `mapGroupsWithState` and `flatMapGroupsWithState` in Append mode (depending on the implementation of the state function)
-
-As Spark cannot check the state function of `mapGroupsWithState`/`flatMapGroupsWithState`, Spark assumes that the state function
-emits late rows if the operator uses Append mode.
-
-Spark provides two ways to check the number of late rows on stateful operators which would help you identify the issue:
-
-1. On Spark UI: check the metrics in stateful operator nodes in query execution details page in SQL tab
-2. On Streaming Query Listener: check "numRowsDroppedByWatermark" in "stateOperators" in QueryProcessEvent.
-
-Please note that "numRowsDroppedByWatermark" represents the number of "dropped" rows by watermark, which is not always same as the count of "late input rows" for the operator.
-It depends on the implementation of the operator - e.g. streaming aggregation does pre-aggregate input rows and checks the late inputs against pre-aggregated inputs,
-hence the number is not same as the number of original input rows. You'd like to just check the fact whether the value is zero or non-zero.
-
-There's a known workaround: split your streaming query into multiple queries per stateful operator, and ensure
-end-to-end exactly once per query. Ensuring end-to-end exactly once for the last query is optional.
 
 ### State Store
 
@@ -1957,6 +2068,11 @@ Here are the configs regarding to RocksDB instance of the state store provider:
     <td>spark.sql.streaming.stateStore.rocksdb.lockAcquireTimeoutMs</td>
     <td>The waiting time in millisecond for acquiring lock in the load operation for RocksDB instance.</td>
     <td>60000</td>
+  </tr>
+  <tr>
+    <td>spark.sql.streaming.stateStore.rocksdb.maxOpenFiles</td>
+    <td>The number of open files that can be used by the RocksDB instance. Value of -1 means that files opened are always kept open. If the open file limit is reached, RocksDB will evict entries from the open file cache and close those file descriptors and remove the entries from the cache.</td>
+    <td>-1</td>
   </tr>
   <tr>
     <td>spark.sql.streaming.stateStore.rocksdb.resetStatsOnLoad</td>
@@ -2774,12 +2890,15 @@ Here are the different kinds of triggers that are supported.
     </td>
   </tr>
   <tr>
-    <td><b>One-time micro-batch</b></td>
+    <td><b>One-time micro-batch</b><i>(deprecated)</i></td>
     <td>
         The query will execute <strong>only one</strong> micro-batch to process all the available data and then
         stop on its own. This is useful in scenarios you want to periodically spin up a cluster,
         process everything that is available since the last period, and then shutdown the
         cluster. In some case, this may lead to significant cost savings.
+        Note that this trigger is deprecated and users are encouraged to migrate to <b>Available-now micro-batch</b>,
+        as it provides the better guarantee of processing, fine-grained scale of batches, and better gradual processing
+        of watermark advancement including no-data batch.
     </td>
   </tr>
   <tr>
@@ -2789,6 +2908,15 @@ Here are the different kinds of triggers that are supported.
         stop on its own. The difference is that, it will process the data in (possibly) multiple micro-batches
         based on the source options (e.g. <code>maxFilesPerTrigger</code> for file source), which will result
         in better query scalability.
+        <ul>
+            <li>This trigger provides a strong guarantee of processing: regardless of how many batches were
+                left over in previous run, it ensures all available data at the time of execution gets
+                processed before termination. All uncommitted batches will be processed first.</li>
+
+            <li>Watermark gets advanced per each batch, and no-data batch gets executed before termination
+                if the last batch advances the watermark. This helps to maintain smaller and predictable
+                state size and smaller latency on the output of stateful operators.</li>
+        </ul>
     </td>
   </tr>
   <tr>
@@ -2819,7 +2947,7 @@ df.writeStream
   .trigger(Trigger.ProcessingTime("2 seconds"))
   .start()
 
-// One-time trigger
+// One-time trigger (Deprecated, encouraged to use Available-now trigger)
 df.writeStream
   .format("console")
   .trigger(Trigger.Once())
@@ -2857,7 +2985,7 @@ df.writeStream
   .trigger(Trigger.ProcessingTime("2 seconds"))
   .start();
 
-// One-time trigger
+// One-time trigger (Deprecated, encouraged to use Available-now trigger)
 df.writeStream
   .format("console")
   .trigger(Trigger.Once())
@@ -2893,7 +3021,7 @@ df.writeStream \
   .trigger(processingTime='2 seconds') \
   .start()
 
-# One-time trigger
+# One-time trigger (Deprecated, encouraged to use Available-now trigger)
 df.writeStream \
   .format("console") \
   .trigger(once=True) \
@@ -3323,7 +3451,7 @@ Will print something like the following.
 
 You can also asynchronously monitor all queries associated with a
 `SparkSession` by attaching a `StreamingQueryListener`
-([Scala](api/scala/org/apache/spark/sql/streaming/StreamingQueryListener.html)/[Java](api/java/org/apache/spark/sql/streaming/StreamingQueryListener.html) docs).
+([Scala](api/scala/org/apache/spark/sql/streaming/StreamingQueryListener.html)/[Java](api/java/org/apache/spark/sql/streaming/StreamingQueryListener.html)/[Python](api/python/reference/pyspark.ss/api/pyspark.sql.streaming.StreamingQueryListener.html) docs).
 Once you attach your custom `StreamingQueryListener` object with
 `sparkSession.streams.addListener()`, you will get callbacks when a query is started and
 stopped and when there is progress made in an active query. Here is an example,
@@ -3371,8 +3499,21 @@ spark.streams().addListener(new StreamingQueryListener() {
 
 </div>
 <div data-lang="python"  markdown="1">
-{% highlight bash %}
-Not available in Python.
+{% highlight python %}
+spark = ...
+
+class Listener(StreamingQueryListener):
+    def onQueryStarted(self, event):
+        print("Query started: " + queryStarted.id)
+
+    def onQueryProgress(self, event):
+        println("Query terminated: " + queryTerminated.id)
+
+    def onQueryTerminated(self, event):
+        println("Query made progress: " + queryProgress.progress)
+
+
+spark.streams.addListener(Listener())
 {% endhighlight %}
 
 </div>
@@ -3539,6 +3680,62 @@ the effect of the change is not well-defined. For all of them:
     structures into bytes using an encoding/decoding scheme that supports schema migration. For example,
     if you save your state as Avro-encoded bytes, then you are free to change the Avro-state-schema between query
     restarts as the binary state will always be restored successfully.
+
+# Asynchronous Progress Tracking
+## What is it?
+
+Asynchronous progress tracking allows streaming queries to checkpoint progress asynchronously and in parallel to the actual data processing within a micro-batch, reducing latency associated with maintaining the offset log and commit log.
+
+![Async Progress Tracking](img/async-progress.png)
+
+## How does it work?
+
+Structured Streaming relies on persisting and managing offsets as progress indicators for query processing. Offset management operation directly impacts processing latency, because no data processing can occur until these operations are complete. Asynchronous progress tracking enables streaming queries to checkpoint progress without being impacted by these offset management operations.
+
+## How to use it?
+
+The code snippet below provides an example of how to use this feature:
+```scala
+val stream = spark.readStream
+      .format("kafka")
+      .option("kafka.bootstrap.servers", "host1:port1,host2:port2")
+      .option("subscribe", "in")
+      .load()
+val query = stream.writeStream
+     .format("kafka")
+	.option("topic", "out")
+     .option("checkpointLocation", "/tmp/checkpoint")
+	.option("asyncProgressTrackingEnabled", "true")
+     .start()
+```
+
+The table below describes the configurations for this feature and default values associated with them.
+
+| Option    | Value           | Default | Description       | 
+|-------------|-----------------|------------|---------------------|
+|asyncProgressTrackingEnabled|true/false|false|enable or disable asynchronous progress tracking|
+|asyncProgressCheckpointingInterval|minutes|1|the interval in which we commit offsets and completion commits|
+
+## Limitations
+The initial version of the feature has the following limitations:
+
+* Asynchronous progress tracking is only supported in stateless queries using Kafka Sink
+* Exactly once end-to-end processing will not be supported with this asynchronous progress tracking because offset ranges for batch can be changed in case of failure. Though many sinks, such as Kafka sink, do not support writing exactly once anyways.
+
+## Switching the setting off
+Turning the async progress tracking off may cause the following exception to be thrown
+
+```scala
+java.lang.IllegalStateException: batch x doesn't exist
+```
+
+Also the following error message may be printed in the driver logs:
+
+```
+The offset log for batch x doesn't exist, which is required to restart the query from the latest batch x from the offset log. Please ensure there are two subsequent offset logs available for the latest batch via manually deleting the offset file(s). Please also ensure the latest batch for commit log is equal or one batch earlier than the latest batch for offset log.
+```
+
+This is caused by the fact that when async progress tracking is enabled, the framework will not checkpoint progress for every batch as would be done if async progress tracking is not used. To solve this problem simply re-enable “asyncProgressTrackingEnabled” and set “asyncProgressCheckpointingInterval” to 0 and run the streaming query until at least two micro-batches have been processed. Async progress tracking can be now safely disabled and restarting query should proceed normally.
 
 # Continuous Processing
 ## [Experimental]

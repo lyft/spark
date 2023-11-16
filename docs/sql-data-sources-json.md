@@ -155,7 +155,7 @@ Data source options of JSON can be set via:
     <td>read</td>
   </tr>
   <tr>
-    <td><code>allowNumericLeadingZero</code></td>
+    <td><code>allowNumericLeadingZeros</code></td>
     <td><code>false</code></td>
     <td>Allows leading zeros in numbers (e.g. 00012).</td>
     <td>read</td>
@@ -203,6 +203,12 @@ Data source options of JSON can be set via:
     <td>read/write</td>
   </tr>
   <tr>
+    <td><code>enableDateTimeParsingFallback</code></td>
+    <td>Enabled if the time parser policy has legacy settings or if no custom date or timestamp pattern was provided.</td>
+    <td>Allows falling back to the backward compatible (Spark 1.x and 2.0) behavior of parsing dates and timestamps if values do not match the set patterns.</td>
+    <td>read</td>
+  </tr>
+  <tr>
     <td><code>multiLine</code></td>
     <td><code>false</code></td>
     <td>Parse one record, which may span multiple lines, per file. JSON built-in functions ignore this option.</td>
@@ -235,7 +241,7 @@ Data source options of JSON can be set via:
   <tr>
     <td><code>dropFieldIfAllNull</code></td>
     <td><code>false</code></td>
-    <td>Whether to ignore column of all null values or empty array/struct during schema inference.</td>
+    <td>Whether to ignore column of all null values or empty array during schema inference.</td>
     <td>read</td>
   </tr>
   <tr>

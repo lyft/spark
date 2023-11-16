@@ -25,7 +25,9 @@ import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException;
 import org.apache.spark.sql.errors.QueryCompilationErrors;
 import org.apache.spark.sql.types.StructType;
 
+import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Catalog methods for working with Tables.
@@ -79,6 +81,11 @@ public interface TableCatalog extends CatalogPlugin {
   String OPTION_PREFIX = "option.";
 
   /**
+   * @return the set of capabilities for this TableCatalog
+   */
+  default Set<TableCatalogCapability> capabilities() { return Collections.emptySet(); }
+
+  /**
    * List the tables in a namespace from the catalog.
    * <p>
    * If the catalog supports views, this must return identifiers for only tables and not views.
@@ -113,7 +120,7 @@ public interface TableCatalog extends CatalogPlugin {
    * @throws NoSuchTableException If the table doesn't exist or is a view
    */
   default Table loadTable(Identifier ident, String version) throws NoSuchTableException {
-    throw QueryCompilationErrors.tableNotSupportTimeTravelError(ident);
+    throw QueryCompilationErrors.noSuchTableError(ident);
   }
 
   /**
@@ -128,7 +135,7 @@ public interface TableCatalog extends CatalogPlugin {
    * @throws NoSuchTableException If the table doesn't exist or is a view
    */
   default Table loadTable(Identifier ident, long timestamp) throws NoSuchTableException {
-    throw QueryCompilationErrors.tableNotSupportTimeTravelError(ident);
+    throw QueryCompilationErrors.noSuchTableError(ident);
   }
 
   /**
@@ -161,9 +168,22 @@ public interface TableCatalog extends CatalogPlugin {
 
   /**
    * Create a table in the catalog.
+   * <p>
+   * This is deprecated. Please override
+   * {@link #createTable(Identifier, Column[], Transform[], Map)} instead.
+   */
+  @Deprecated
+  Table createTable(
+      Identifier ident,
+      StructType schema,
+      Transform[] partitions,
+      Map<String, String> properties) throws TableAlreadyExistsException, NoSuchNamespaceException;
+
+  /**
+   * Create a table in the catalog.
    *
    * @param ident a table identifier
-   * @param schema the schema of the new table, as a struct type
+   * @param columns the columns of the new table.
    * @param partitions transforms to use for partitioning data in the table
    * @param properties a string map of table properties
    * @return metadata for the new table
@@ -171,11 +191,13 @@ public interface TableCatalog extends CatalogPlugin {
    * @throws UnsupportedOperationException If a requested partition transform is not supported
    * @throws NoSuchNamespaceException If the identifier namespace does not exist (optional)
    */
-  Table createTable(
+  default Table createTable(
       Identifier ident,
-      StructType schema,
+      Column[] columns,
       Transform[] partitions,
-      Map<String, String> properties) throws TableAlreadyExistsException, NoSuchNamespaceException;
+      Map<String, String> properties) throws TableAlreadyExistsException, NoSuchNamespaceException {
+    return createTable(ident, CatalogV2Util.v2ColumnsToStructType(columns), partitions, properties);
+  }
 
   /**
    * Apply a set of {@link TableChange changes} to a table in the catalog.

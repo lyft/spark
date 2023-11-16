@@ -14,13 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
+from pyspark.errors import AnalysisException
 from pyspark.sql.types import StructType, StructField, IntegerType
-from pyspark.sql.utils import AnalysisException
 from pyspark.testing.sqlutils import ReusedSQLTestCase
 
 
-class CatalogTests(ReusedSQLTestCase):
+class CatalogTestsMixin:
     def test_current_database(self):
         spark = self.spark
         with self.database("some_db"):
@@ -50,6 +49,16 @@ class CatalogTests(ReusedSQLTestCase):
             self.assertFalse(spark.catalog.databaseExists("some_db"))
             spark.sql("CREATE DATABASE some_db")
             self.assertTrue(spark.catalog.databaseExists("some_db"))
+            self.assertTrue(spark.catalog.databaseExists("spark_catalog.some_db"))
+            self.assertFalse(spark.catalog.databaseExists("spark_catalog.some_db2"))
+
+    def test_get_database(self):
+        spark = self.spark
+        with self.database("some_db"):
+            spark.sql("CREATE DATABASE some_db")
+            db = spark.catalog.getDatabase("spark_catalog.some_db")
+            self.assertEqual(db.name, "some_db")
+            self.assertEqual(db.catalog, "spark_catalog")
 
     def test_list_tables(self):
         from pyspark.sql.catalog import Table
@@ -79,55 +88,93 @@ class CatalogTests(ReusedSQLTestCase):
                     self.assertEqual(tables, tablesDefault)
                     self.assertEqual(len(tables), 3)
                     self.assertEqual(len(tablesSomeDb), 2)
-                    self.assertEqual(
-                        tables[0],
-                        Table(
-                            name="tab1",
-                            database="default",
-                            description=None,
-                            tableType="MANAGED",
-                            isTemporary=False,
-                        ),
-                    )
-                    self.assertEqual(
-                        tables[1],
-                        Table(
-                            name="tab3_via_catalog",
-                            database="default",
+
+                    # make table in old fashion
+                    def makeTable(
+                        name,
+                        database,
+                        description,
+                        tableType,
+                        isTemporary,
+                    ):
+                        return Table(
+                            name=name,
+                            catalog=None,
+                            namespace=[database] if database is not None else None,
                             description=description,
-                            tableType="MANAGED",
-                            isTemporary=False,
-                        ),
+                            tableType=tableType,
+                            isTemporary=isTemporary,
+                        )
+
+                    # compare tables in old fashion
+                    def compareTables(t1, t2):
+                        return (
+                            t1.name == t2.name
+                            and t1.database == t2.database
+                            and t1.description == t2.description
+                            and t1.tableType == t2.tableType
+                            and t1.isTemporary == t2.isTemporary
+                        )
+
+                    self.assertTrue(
+                        compareTables(
+                            tables[0],
+                            makeTable(
+                                name="tab1",
+                                database="default",
+                                description=None,
+                                tableType="MANAGED",
+                                isTemporary=False,
+                            ),
+                        )
                     )
-                    self.assertEqual(
-                        tables[2],
-                        Table(
-                            name="temp_tab",
-                            database=None,
-                            description=None,
-                            tableType="TEMPORARY",
-                            isTemporary=True,
-                        ),
+                    self.assertTrue(
+                        compareTables(
+                            tables[1],
+                            makeTable(
+                                name="tab3_via_catalog",
+                                database="default",
+                                description=description,
+                                tableType="MANAGED",
+                                isTemporary=False,
+                            ),
+                        )
                     )
-                    self.assertEqual(
-                        tablesSomeDb[0],
-                        Table(
-                            name="tab2",
-                            database="some_db",
-                            description=None,
-                            tableType="MANAGED",
-                            isTemporary=False,
-                        ),
+                    self.assertTrue(
+                        compareTables(
+                            tables[2],
+                            makeTable(
+                                name="temp_tab",
+                                database=None,
+                                description=None,
+                                tableType="TEMPORARY",
+                                isTemporary=True,
+                            ),
+                        )
                     )
-                    self.assertEqual(
-                        tablesSomeDb[1],
-                        Table(
-                            name="temp_tab",
-                            database=None,
-                            description=None,
-                            tableType="TEMPORARY",
-                            isTemporary=True,
-                        ),
+                    self.assertTrue(
+                        compareTables(
+                            tablesSomeDb[0],
+                            makeTable(
+                                name="tab2",
+                                database="some_db",
+                                description=None,
+                                tableType="MANAGED",
+                                isTemporary=False,
+                            ),
+                        )
+                    )
+                    self.assertTrue(
+                        compareTables(
+                            tablesSomeDb[1],
+                            makeTable(
+                                name="temp_tab",
+                                database=None,
+                                description=None,
+                                tableType="TEMPORARY",
+                                isTemporary=True,
+                            ),
+                        )
                     )
                     self.assertRaisesRegex(
                         AnalysisException,
@@ -136,8 +183,6 @@ class CatalogTests(ReusedSQLTestCase):
                     )
 
     def test_list_functions(self):
-        from pyspark.sql.catalog import Function
-
         spark = self.spark
         with self.database("some_db"):
             spark.sql("CREATE DATABASE some_db")
@@ -151,19 +196,23 @@ class CatalogTests(ReusedSQLTestCase):
             self.assertTrue("to_timestamp" in functions)
             self.assertTrue("to_unix_timestamp" in functions)
             self.assertTrue("current_database" in functions)
+            self.assertEqual(functions["+"].name, "+")
+            self.assertEqual(functions["+"].description, "expr1 + expr2 - Returns `expr1`+`expr2`.")
             self.assertEqual(
-                functions["+"],
-                Function(
-                    name="+",
-                    description=None,
-                    className="org.apache.spark.sql.catalyst.expressions.Add",
-                    isTemporary=True,
-                ),
+                functions["+"].className, "org.apache.spark.sql.catalyst.expressions.Add"
             )
+            self.assertTrue(functions["+"].isTemporary)
             self.assertEqual(functions, functionsDefault)
 
             with self.function("func1", "some_db.func2"):
-                spark.udf.register("temp_func", lambda x: str(x))
+                try:
+                    spark.udf
+                    support_udf = True
+                except Exception:
+                    support_udf = False
+
+                if support_udf:
+                    spark.udf.register("temp_func", lambda x: str(x))
                 spark.sql("CREATE FUNCTION func1 AS 'org.apache.spark.data.bricks'")
                 spark.sql("CREATE FUNCTION some_db.func2 AS 'org.apache.spark.data.bricks'")
                 newFunctions = dict((f.name, f) for f in spark.catalog.listFunctions())
@@ -172,10 +221,12 @@ class CatalogTests(ReusedSQLTestCase):
                 )
                 self.assertTrue(set(functions).issubset(set(newFunctions)))
                 self.assertTrue(set(functions).issubset(set(newFunctionsSomeDb)))
-                self.assertTrue("temp_func" in newFunctions)
+                if support_udf:
+                    self.assertTrue("temp_func" in newFunctions)
                 self.assertTrue("func1" in newFunctions)
                 self.assertTrue("func2" not in newFunctions)
-                self.assertTrue("temp_func" in newFunctionsSomeDb)
+                if support_udf:
+                    self.assertTrue("temp_func" in newFunctionsSomeDb)
                 self.assertTrue("func1" not in newFunctionsSomeDb)
                 self.assertTrue("func2" in newFunctionsSomeDb)
                 self.assertRaisesRegex(
@@ -189,10 +240,25 @@ class CatalogTests(ReusedSQLTestCase):
         spark = self.spark
         with self.function("func1"):
             self.assertFalse(spark.catalog.functionExists("func1"))
+            self.assertFalse(spark.catalog.functionExists("default.func1"))
+            self.assertFalse(spark.catalog.functionExists("spark_catalog.default.func1"))
             self.assertFalse(spark.catalog.functionExists("func1", "default"))
             spark.sql("CREATE FUNCTION func1 AS 'org.apache.spark.data.bricks'")
             self.assertTrue(spark.catalog.functionExists("func1"))
+            self.assertTrue(spark.catalog.functionExists("default.func1"))
+            self.assertTrue(spark.catalog.functionExists("spark_catalog.default.func1"))
             self.assertTrue(spark.catalog.functionExists("func1", "default"))
+
+    def test_get_function(self):
+        spark = self.spark
+        with self.function("func1"):
+            spark.sql("CREATE FUNCTION func1 AS 'org.apache.spark.data.bricks'")
+            func1 = spark.catalog.getFunction("spark_catalog.default.func1")
+            self.assertTrue(func1.name == "func1")
+            self.assertTrue(func1.namespace == ["default"])
+            self.assertTrue(func1.catalog == "spark_catalog")
+            self.assertTrue(func1.className == "org.apache.spark.data.bricks")
+            self.assertFalse(func1.isTemporary)
 
     def test_list_columns(self):
         from pyspark.sql.catalog import Column
@@ -205,7 +271,9 @@ class CatalogTests(ReusedSQLTestCase):
                 spark.sql(
                     "CREATE TABLE some_db.tab2 (nickname STRING, tolerance FLOAT) USING parquet"
                 )
-                columns = sorted(spark.catalog.listColumns("tab1"), key=lambda c: c.name)
+                columns = sorted(
+                    spark.catalog.listColumns("spark_catalog.default.tab1"), key=lambda c: c.name
+                )
                 columnsDefault = sorted(
                     spark.catalog.listColumns("tab1", "default"), key=lambda c: c.name
                 )
@@ -268,6 +336,21 @@ class CatalogTests(ReusedSQLTestCase):
                     lambda: spark.catalog.listColumns("does_not_exist"),
                 )
 
+    def test_table_cache(self):
+        spark = self.spark
+        with self.database("some_db"):
+            spark.sql("CREATE DATABASE some_db")
+            with self.table("tab1"):
+                spark.sql("CREATE TABLE some_db.tab1 (name STRING, age INT) USING parquet")
+                self.assertFalse(spark.catalog.isCached("some_db.tab1"))
+                self.assertFalse(spark.catalog.isCached("spark_catalog.some_db.tab1"))
+                spark.catalog.cacheTable("spark_catalog.some_db.tab1")
+                self.assertTrue(spark.catalog.isCached("some_db.tab1"))
+                self.assertTrue(spark.catalog.isCached("spark_catalog.some_db.tab1"))
+                spark.catalog.uncacheTable("spark_catalog.some_db.tab1")
+                self.assertFalse(spark.catalog.isCached("some_db.tab1"))
+                self.assertFalse(spark.catalog.isCached("spark_catalog.some_db.tab1"))
+
     def test_table_exists(self):
         # SPARK-36176: testing that table_exists returns correct boolean
         spark = self.spark
@@ -278,8 +361,48 @@ class CatalogTests(ReusedSQLTestCase):
                 self.assertFalse(spark.catalog.tableExists("tab2", "some_db"))
                 spark.sql("CREATE TABLE tab1 (name STRING, age INT) USING parquet")
                 self.assertTrue(spark.catalog.tableExists("tab1"))
+                self.assertTrue(spark.catalog.tableExists("default.tab1"))
+                self.assertTrue(spark.catalog.tableExists("spark_catalog.default.tab1"))
+                self.assertTrue(spark.catalog.tableExists("tab1", "default"))
                 spark.sql("CREATE TABLE some_db.tab2 (name STRING, age INT) USING parquet")
+                self.assertFalse(spark.catalog.tableExists("tab2"))
+                self.assertTrue(spark.catalog.tableExists("some_db.tab2"))
+                self.assertTrue(spark.catalog.tableExists("spark_catalog.some_db.tab2"))
                 self.assertTrue(spark.catalog.tableExists("tab2", "some_db"))
+
+    def test_get_table(self):
+        spark = self.spark
+        with self.database("some_db"):
+            spark.sql("CREATE DATABASE some_db")
+            with self.table("tab1"):
+                spark.sql("CREATE TABLE tab1 (name STRING, age INT) USING parquet")
+                self.assertEqual(spark.catalog.getTable("tab1").database, "default")
+                self.assertEqual(spark.catalog.getTable("default.tab1").catalog, "spark_catalog")
+                self.assertEqual(spark.catalog.getTable("spark_catalog.default.tab1").name, "tab1")
+
+    def test_refresh_table(self):
+        import os
+        import tempfile
+
+        spark = self.spark
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.table("my_tab"):
+                spark.sql(
+                    "CREATE TABLE my_tab (col STRING) USING TEXT LOCATION '{}'".format(tmp_dir)
+                )
+                spark.sql("INSERT INTO my_tab SELECT 'abc'")
+                spark.catalog.cacheTable("my_tab")
+                self.assertEqual(spark.table("my_tab").count(), 1)
+
+                os.system("rm -rf {}/*".format(tmp_dir))
+                self.assertEqual(spark.table("my_tab").count(), 1)
+
+                spark.catalog.refreshTable("spark_catalog.default.my_tab")
+                self.assertEqual(spark.table("my_tab").count(), 0)
+
+
+class CatalogTests(ReusedSQLTestCase):
+    pass
 
 
 if __name__ == "__main__":
@@ -287,7 +410,7 @@ if __name__ == "__main__":
     from pyspark.sql.tests.test_catalog import *  # noqa: F401
 
     try:
-        import xmlrunner  # type: ignore[import]
+        import xmlrunner
 
         testRunner = xmlrunner.XMLTestRunner(output="target/test-reports", verbosity=2)
     except ImportError:

@@ -24,7 +24,8 @@ import scala.reflect.runtime.universe.typeTag
 
 import org.apache.spark.annotation.Stable
 import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
-import org.apache.spark.sql.errors.QueryCompilationErrors
+import org.apache.spark.sql.catalyst.types.{PhysicalDataType, PhysicalDecimalType}
+import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryExecutionErrors}
 import org.apache.spark.sql.internal.SQLConf
 
 /**
@@ -50,8 +51,8 @@ case class DecimalType(precision: Int, scale: Int) extends FractionalType {
   }
 
   if (precision > DecimalType.MAX_PRECISION) {
-    throw QueryCompilationErrors.decimalOnlySupportPrecisionUptoError(
-      DecimalType.simpleString, DecimalType.MAX_PRECISION)
+    throw QueryExecutionErrors.decimalPrecisionExceedsMaxPrecisionError(
+      precision, DecimalType.MAX_PRECISION)
   }
 
   // default constructor for Java
@@ -110,6 +111,9 @@ case class DecimalType(precision: Int, scale: Int) extends FractionalType {
    */
   override def defaultSize: Int = if (precision <= Decimal.MAX_LONG_DIGITS) 8 else 16
 
+  private[sql] override def physicalDataType: PhysicalDataType =
+    PhysicalDecimalType(precision, scale)
+
   override def simpleString: String = s"decimal($precision,$scale)"
 
   private[spark] override def asNullable: DecimalType = this
@@ -127,7 +131,8 @@ object DecimalType extends AbstractDataType {
 
   val MAX_PRECISION = 38
   val MAX_SCALE = 38
-  val SYSTEM_DEFAULT: DecimalType = DecimalType(MAX_PRECISION, 18)
+  val DEFAULT_SCALE = 18
+  val SYSTEM_DEFAULT: DecimalType = DecimalType(MAX_PRECISION, DEFAULT_SCALE)
   val USER_DEFAULT: DecimalType = DecimalType(10, 0)
   val MINIMUM_ADJUSTED_SCALE = 6
 

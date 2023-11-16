@@ -27,6 +27,7 @@ import scala.util.control.NonFatal
 
 import sun.util.calendar.ZoneInfo
 
+import org.apache.spark.sql.catalyst.trees.SQLQueryContext
 import org.apache.spark.sql.catalyst.util.DateTimeConstants._
 import org.apache.spark.sql.catalyst.util.RebaseDateTime._
 import org.apache.spark.sql.errors.QueryExecutionErrors
@@ -158,11 +159,19 @@ object DateTimeUtils {
    * @param micros The number of microseconds since 1970-01-01T00:00:00.000000Z.
    * @return A `java.sql.Timestamp` from number of micros since epoch.
    */
-  def toJavaTimestamp(micros: Long): Timestamp = {
-    val rebasedMicros = rebaseGregorianToJulianMicros(micros)
-    val seconds = Math.floorDiv(rebasedMicros, MICROS_PER_SECOND)
+  def toJavaTimestamp(micros: Long): Timestamp =
+    toJavaTimestampNoRebase(rebaseGregorianToJulianMicros(micros))
+
+  /**
+   * Converts microseconds since the epoch to an instance of `java.sql.Timestamp`.
+   *
+   * @param micros The number of microseconds since 1970-01-01T00:00:00.000000Z.
+   * @return A `java.sql.Timestamp` from number of micros since epoch.
+   */
+  def toJavaTimestampNoRebase(micros: Long): Timestamp = {
+    val seconds = Math.floorDiv(micros, MICROS_PER_SECOND)
     val ts = new Timestamp(seconds * MILLIS_PER_SECOND)
-    val nanos = (rebasedMicros - seconds * MICROS_PER_SECOND) * NANOS_PER_MICROS
+    val nanos = (micros - seconds * MICROS_PER_SECOND) * NANOS_PER_MICROS
     ts.setNanos(nanos.toInt)
     ts
   }
@@ -186,10 +195,18 @@ object DateTimeUtils {
    *          Gregorian calendars.
    * @return The number of micros since epoch from `java.sql.Timestamp`.
    */
-  def fromJavaTimestamp(t: Timestamp): Long = {
-    val micros = millisToMicros(t.getTime) + (t.getNanos / NANOS_PER_MICROS) % MICROS_PER_MILLIS
-    rebaseJulianToGregorianMicros(micros)
-  }
+  def fromJavaTimestamp(t: Timestamp): Long =
+    rebaseJulianToGregorianMicros(fromJavaTimestampNoRebase(t))
+
+  /**
+   * Converts an instance of `java.sql.Timestamp` to the number of microseconds since
+   * 1970-01-01T00:00:00.000000Z.
+   *
+   * @param t an instance of `java.sql.Timestamp`.
+   * @return The number of micros since epoch from `java.sql.Timestamp`.
+   */
+  def fromJavaTimestampNoRebase(t: Timestamp): Long =
+    millisToMicros(t.getTime) + (t.getNanos / NANOS_PER_MICROS) % MICROS_PER_MILLIS
 
   /**
    * Converts an Java object to microseconds.
@@ -448,17 +465,20 @@ object DateTimeUtils {
     }
   }
 
-  def stringToTimestampAnsi(s: UTF8String, timeZoneId: ZoneId, errorContext: String = ""): Long = {
+  def stringToTimestampAnsi(
+      s: UTF8String,
+      timeZoneId: ZoneId,
+      context: SQLQueryContext = null): Long = {
     stringToTimestamp(s, timeZoneId).getOrElse {
       throw QueryExecutionErrors.invalidInputInCastToDatetimeError(
-        s, StringType, TimestampType, errorContext)
+        s, StringType, TimestampType, context)
     }
   }
 
-  def doubleToTimestampAnsi(d: Double, errorContext: String): Long = {
+  def doubleToTimestampAnsi(d: Double, context: SQLQueryContext): Long = {
     if (d.isNaN || d.isInfinite) {
       throw QueryExecutionErrors.invalidInputInCastToDatetimeError(
-        d, DoubleType, TimestampType, errorContext)
+        d, DoubleType, TimestampType, context)
     } else {
       DoubleExactNumeric.toLong(d * MICROS_PER_SECOND)
     }
@@ -505,10 +525,12 @@ object DateTimeUtils {
     stringToTimestampWithoutTimeZone(s, true)
   }
 
-  def stringToTimestampWithoutTimeZoneAnsi(s: UTF8String, errorContext: String): Long = {
+  def stringToTimestampWithoutTimeZoneAnsi(
+      s: UTF8String,
+      context: SQLQueryContext): Long = {
     stringToTimestampWithoutTimeZone(s, true).getOrElse {
       throw QueryExecutionErrors.invalidInputInCastToDatetimeError(
-        s, StringType, TimestampNTZType, errorContext)
+        s, StringType, TimestampNTZType, context)
     }
   }
 
@@ -547,7 +569,7 @@ object DateTimeUtils {
   /**
    * Converts the local date to the number of days since 1970-01-01.
    */
-  def localDateToDays(localDate: LocalDate): Int = Math.toIntExact(localDate.toEpochDay)
+  def localDateToDays(localDate: LocalDate): Int = MathUtils.toIntExact(localDate.toEpochDay)
 
   /**
    * Obtains an instance of `java.time.LocalDate` from the epoch day count.
@@ -624,10 +646,12 @@ object DateTimeUtils {
     }
   }
 
-  def stringToDateAnsi(s: UTF8String, errorContext: String = ""): Int = {
+  def stringToDateAnsi(
+      s: UTF8String,
+      context: SQLQueryContext = null): Int = {
     stringToDate(s).getOrElse {
       throw QueryExecutionErrors.invalidInputInCastToDatetimeError(
-        s, StringType, DateType, errorContext)
+        s, StringType, DateType, context)
     }
   }
 
@@ -1203,25 +1227,29 @@ object DateTimeUtils {
     try {
       unit.toUpperCase(Locale.ROOT) match {
         case "MICROSECOND" =>
-          timestampAddDayTime(micros, quantity, zoneId)
+          timestampAddInterval(micros, 0, 0, quantity, zoneId)
         case "MILLISECOND" =>
-          timestampAddDayTime(micros, quantity * MICROS_PER_MILLIS, zoneId)
+          timestampAddInterval(micros, 0, 0,
+            Math.multiplyExact(quantity.toLong, MICROS_PER_MILLIS), zoneId)
         case "SECOND" =>
-          timestampAddDayTime(micros, quantity * MICROS_PER_SECOND, zoneId)
+          timestampAddInterval(micros, 0, 0,
+            Math.multiplyExact(quantity.toLong, MICROS_PER_SECOND), zoneId)
         case "MINUTE" =>
-          timestampAddDayTime(micros, quantity * MICROS_PER_MINUTE, zoneId)
+          timestampAddInterval(micros, 0, 0,
+            Math.multiplyExact(quantity.toLong, MICROS_PER_MINUTE), zoneId)
         case "HOUR" =>
-          timestampAddDayTime(micros, quantity * MICROS_PER_HOUR, zoneId)
+          timestampAddInterval(micros, 0, 0,
+            Math.multiplyExact(quantity.toLong, MICROS_PER_HOUR), zoneId)
         case "DAY" | "DAYOFYEAR" =>
-          timestampAddDayTime(micros, quantity * MICROS_PER_DAY, zoneId)
+          timestampAddInterval(micros, 0, quantity, 0, zoneId)
         case "WEEK" =>
-          timestampAddDayTime(micros, quantity * MICROS_PER_DAY * DAYS_PER_WEEK, zoneId)
+          timestampAddInterval(micros, 0, Math.multiplyExact(quantity, DAYS_PER_WEEK), 0, zoneId)
         case "MONTH" =>
           timestampAddMonths(micros, quantity, zoneId)
         case "QUARTER" =>
-          timestampAddMonths(micros, quantity * 3, zoneId)
+          timestampAddMonths(micros, Math.multiplyExact(quantity, 3), zoneId)
         case "YEAR" =>
-          timestampAddMonths(micros, quantity * MONTHS_PER_YEAR, zoneId)
+          timestampAddMonths(micros, Math.multiplyExact(quantity, MONTHS_PER_YEAR), zoneId)
       }
     } catch {
       case _: scala.MatchError =>

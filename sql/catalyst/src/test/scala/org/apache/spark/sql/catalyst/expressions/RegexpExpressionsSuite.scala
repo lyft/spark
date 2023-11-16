@@ -19,12 +19,14 @@ package org.apache.spark.sql.catalyst.expressions
 
 import org.apache.spark.{SparkFunSuite, SparkRuntimeException}
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.analysis.TypeCheckResult.DataTypeMismatch
 import org.apache.spark.sql.catalyst.dsl.expressions._
+import org.apache.spark.sql.catalyst.expressions.Cast._
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenContext
 import org.apache.spark.sql.catalyst.expressions.codegen.GenerateUnsafeProjection
 import org.apache.spark.sql.catalyst.optimizer.ConstantFolding
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.StringType
+import org.apache.spark.sql.types.{IntegerType, StringType}
 
 /**
  * Unit tests for regular expression (regexp) related SQL expressions.
@@ -46,7 +48,7 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
     (implicit inputToExpression: A => Expression): Unit = {
     checkEvaluation(mkExpr(input), expected) // check literal input
 
-    val regex = 'a.string.at(0)
+    val regex = $"a".string.at(0)
     checkEvaluation(mkExpr(regex), expected, create_row(input)) // check row input
   }
 
@@ -152,15 +154,18 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
     // scalastyle:on nonascii
 
     // invalid escaping
-    val invalidEscape = intercept[AnalysisException] {
-      evaluateWithoutCodegen("""a""" like """\a""")
-    }
-    assert(invalidEscape.getMessage.contains("pattern"))
-
-    val endEscape = intercept[AnalysisException] {
-      evaluateWithoutCodegen("""a""" like """a\""")
-    }
-    assert(endEscape.getMessage.contains("pattern"))
+    checkError(
+      exception = intercept[AnalysisException] {
+        evaluateWithoutCodegen("""a""" like """\a""")
+      },
+      errorClass = "INVALID_FORMAT.ESC_IN_THE_MIDDLE",
+      parameters = Map("format" -> """'\\a'""", "char" -> "'a'"))
+    checkError(
+      exception = intercept[AnalysisException] {
+        evaluateWithoutCodegen("""a""" like """a\""")
+      },
+      errorClass = "INVALID_FORMAT.ESC_AT_THE_END",
+      parameters = Map("format" -> """'a\\'"""))
 
     // case
     checkLiteralRow("A" like _, "a%", false)
@@ -229,14 +234,12 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
       // scalastyle:on nonascii
 
       // invalid escaping
-      val invalidEscape = intercept[AnalysisException] {
-        evaluateWithoutCodegen("""a""" like(s"""${escapeChar}a""", escapeChar))
-      }
-      assert(invalidEscape.getMessage.contains("pattern"))
-      val endEscape = intercept[AnalysisException] {
-        evaluateWithoutCodegen("""a""" like(s"""a$escapeChar""", escapeChar))
-      }
-      assert(endEscape.getMessage.contains("pattern"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          evaluateWithoutCodegen("""a""" like(s"""${escapeChar}a""", escapeChar))
+        },
+        errorClass = "INVALID_FORMAT.ESC_IN_THE_MIDDLE",
+        parameters = Map("format" -> s"'${escapeChar}a'", "char" -> "'a'"))
 
       // case
       checkLiteralRow("A" like(_, escapeChar), "a%", false)
@@ -276,14 +279,27 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
     checkLiteralRow("abc"  rlike _, "^bc", false)
     checkLiteralRow("abc"  rlike _, "^ab", true)
     checkLiteralRow("abc"  rlike _, "^bc", false)
-
-    intercept[java.util.regex.PatternSyntaxException] {
-      evaluateWithoutCodegen("abbbbc" rlike "**")
-    }
-    intercept[java.util.regex.PatternSyntaxException] {
-      val regex = 'a.string.at(0)
-      evaluateWithoutCodegen("abbbbc" rlike regex, create_row("**"))
-    }
+    checkError(
+      exception = intercept[SparkRuntimeException] {
+        evaluateWithoutCodegen("abbbbc" rlike "**")
+      },
+      errorClass = "INVALID_PARAMETER_VALUE.PATTERN",
+      parameters = Map(
+        "parameter" -> toSQLId("regexp"),
+        "functionName" -> toSQLId("rlike"),
+        "value" -> "'**'")
+    )
+    checkError(
+      exception = intercept[SparkRuntimeException] {
+        val regex = $"a".string.at(0)
+        evaluateWithoutCodegen("abbbbc" rlike regex, create_row("**"))
+      },
+      errorClass = "INVALID_PARAMETER_VALUE.PATTERN",
+      parameters = Map(
+        "parameter" -> toSQLId("regexp"),
+        "functionName" -> toSQLId("rlike"),
+        "value" -> "'**'")
+    )
   }
 
   test("RegexReplace") {
@@ -295,9 +311,9 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
     val row6 = create_row("100-200", "(-)", null)
     val row7 = create_row("", "^$", "<empty string>")
 
-    val s = 's.string.at(0)
-    val p = 'p.string.at(1)
-    val r = 'r.string.at(2)
+    val s = $"s".string.at(0)
+    val p = $"p".string.at(1)
+    val r = $"r".string.at(2)
 
     val expr = RegExpReplace(s, p, r)
     checkEvaluation(expr, "num-num", row1)
@@ -349,9 +365,9 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
     val row6 = create_row("100-200", null, 1)
     val row7 = create_row("100-200", "([a-z])", null)
 
-    val s = 's.string.at(0)
-    val p = 'p.string.at(1)
-    val r = 'r.int.at(2)
+    val s = $"s".string.at(0)
+    val p = $"p".string.at(1)
+    val r = $"r".int.at(2)
 
     val expr = RegExpExtract(s, p, r)
     checkEvaluation(expr, "100", row1)
@@ -401,9 +417,9 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
     val row7 = create_row("100-200,300-400,500-600", null, 1)
     val row8 = create_row("100-200,300-400,500-600", "([a-z])", null)
 
-    val s = 's.string.at(0)
-    val p = 'p.string.at(1)
-    val r = 'r.int.at(2)
+    val s = $"s".string.at(0)
+    val p = $"p".string.at(1)
+    val r = $"r".int.at(2)
 
     val expr = RegExpExtractAll(s, p, r)
     checkEvaluation(expr, Seq("100-200", "300-400", "500-600"), row1)
@@ -442,8 +458,8 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
   }
 
   test("SPLIT") {
-    val s1 = 'a.string.at(0)
-    val s2 = 'b.string.at(1)
+    val s1 = $"a".string.at(0)
+    val s2 = $"b".string.at(1)
     val row1 = create_row("aa2bb3cc", "[1-9]+")
     val row2 = create_row(null, "[1-9]+")
     val row3 = create_row("aa2bb3cc", null)
@@ -461,6 +477,21 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
       StringSplit(s1, s2, -1), Seq("aa", "bb", "cc"), row1)
     checkEvaluation(StringSplit(s1, s2, -1), null, row2)
     checkEvaluation(StringSplit(s1, s2, -1), null, row3)
+    // Empty regex
+    checkEvaluation(
+      StringSplit(Literal("hello"), Literal(""), 0), Seq("h", "e", "l", "l", "o"), row1)
+    checkEvaluation(
+      StringSplit(Literal("hello"), Literal(""), -1), Seq("h", "e", "l", "l", "o"), row1)
+    checkEvaluation(
+      StringSplit(Literal("hello"), Literal(""), 5), Seq("h", "e", "l", "l", "o"), row1)
+    checkEvaluation(
+      StringSplit(Literal("hello"), Literal(""), 3), Seq("h", "e", "l"), row1)
+    checkEvaluation(
+      StringSplit(Literal("hello"), Literal(""), 100), Seq("h", "e", "l", "l", "o"), row1)
+    checkEvaluation(
+      StringSplit(Literal(""), Literal(""), -1), Seq(""), row1)
+    checkEvaluation(
+      StringSplit(Literal(""), Literal(""), 0), Seq(""), row1)
 
     // Test escaping of arguments
     GenerateUnsafeProjection.generate(
@@ -484,18 +515,60 @@ class RegexpExpressionsSuite extends SparkFunSuite with ExpressionEvalHelper {
     }
   }
 
+  test("RegExpInStr") {
+    val expr = new RegExpInStr($"s".string.at(0), $"p".string.at(1))
+    checkEvaluation(expr, 1, create_row("100-200", "(\\d+)-(\\d+)"))
+    checkEvaluation(expr, 1, create_row("100-200", "(\\d+).*"))
+    // will not match anything, empty string get
+    checkEvaluation(expr, 0, create_row("100-200", "([a-z])"))
+    checkEvaluation(expr, null, create_row(null, "([a-z])"))
+    checkEvaluation(expr, null, create_row("100-200", null))
+
+    // Test escaping of arguments
+    GenerateUnsafeProjection.generate(
+      new RegExpInStr(Literal("\"quote"), Literal("\"quote")) :: Nil)
+  }
+
   test("SPARK-39758: invalid regexp pattern") {
     val s = $"s".string.at(0)
     val p = $"p".string.at(1)
     val r = $"r".int.at(2)
-    val prefix = "The value of parameter(s) 'regexp' in"
-    checkExceptionInExpression[SparkRuntimeException](
+    checkErrorInExpression[SparkRuntimeException](
       RegExpExtract(s, p, r),
       create_row("1a 2b 14m", "(?l)", 0),
-      s"$prefix `regexp_extract` is invalid: '(?l)'")
-    checkExceptionInExpression[SparkRuntimeException](
+      "INVALID_PARAMETER_VALUE.PATTERN",
+      Map("parameter" -> "`regexp`", "functionName" -> "`regexp_extract`", "value" -> "'(?l)'")
+    )
+    checkErrorInExpression[SparkRuntimeException](
       RegExpExtractAll(s, p, r),
       create_row("abc", "] [", 0),
-      s"$prefix `regexp_extract_all` is invalid: '] ['")
+      "INVALID_PARAMETER_VALUE.PATTERN",
+      Map("parameter" -> "`regexp`", "functionName" -> "`regexp_extract_all`", "value" -> "'] ['")
+    )
+    checkErrorInExpression[SparkRuntimeException](
+      RegExpInStr(s, p, r),
+      create_row("abc", ", (", 0),
+      "INVALID_PARAMETER_VALUE.PATTERN",
+      Map("parameter" -> "`regexp`", "functionName" -> "`regexp_instr`", "value" -> "', ('")
+    )
+  }
+
+  test("RegExpReplace: fails analysis if pos is not a constant") {
+    val s = $"s".string.at(0)
+    val p = $"p".string.at(1)
+    val r = $"r".string.at(2)
+    val posExpr = AttributeReference("b", IntegerType)()
+    val expr = RegExpReplace(s, p, r, posExpr)
+
+    assert(expr.checkInputDataTypes() ==
+      DataTypeMismatch(
+        errorSubClass = "NON_FOLDABLE_INPUT",
+        messageParameters = Map(
+          "inputName" -> "position",
+          "inputType" -> toSQLType(posExpr.dataType),
+          "inputExpr" -> toSQLExpr(posExpr)
+        )
+      )
+    )
   }
 }

@@ -32,7 +32,9 @@ import org.apache.hadoop.util.Progressable
 import org.scalatest.PrivateMethodTester
 import org.scalatest.time.SpanSugar._
 
+import org.apache.spark.SparkUnsupportedOperationException
 import org.apache.spark.deploy.SparkHadoopUtil
+import org.apache.spark.paths.SparkPath.{fromUrlString => sp}
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.util._
 import org.apache.spark.sql.connector.read.streaming.ReadLimit
@@ -192,7 +194,7 @@ abstract class FileStreamSourceTest
 
   protected def getSourcesFromStreamingQuery(query: StreamExecution): Seq[FileStreamSource] = {
     query.logicalPlan.collect {
-      case StreamingExecutionRelation(source, _) if source.isInstanceOf[FileStreamSource] =>
+      case StreamingExecutionRelation(source, _, _) if source.isInstanceOf[FileStreamSource] =>
         source.asInstanceOf[FileStreamSource]
     }
   }
@@ -257,7 +259,7 @@ class FileStreamSourceSuite extends FileStreamSourceTest {
 
   override def beforeAll(): Unit = {
     super.beforeAll()
-    spark.sessionState.conf.setConf(SQLConf.ORC_IMPLEMENTATION, "native")
+    spark.conf.set(SQLConf.ORC_IMPLEMENTATION, "native")
   }
 
   override def afterAll(): Unit = {
@@ -409,11 +411,14 @@ class FileStreamSourceSuite extends FileStreamSourceTest {
     withTempDir { src =>
       withSQLConf(SQLConf.STREAMING_SCHEMA_INFERENCE.key -> "true") {
 
-        val e = intercept[AnalysisException] {
-          createFileStreamSourceAndGetSchema(
-            format = Some("json"), path = Some(src.getCanonicalPath), schema = None)
-        }
-        assert("Unable to infer schema for JSON. It must be specified manually." === e.getMessage)
+        checkError(
+          exception = intercept[AnalysisException] {
+            createFileStreamSourceAndGetSchema(
+              format = Some("json"), path = Some(src.getCanonicalPath), schema = None)
+          },
+          errorClass = "UNABLE_TO_INFER_SCHEMA",
+          parameters = Map("format" -> "JSON")
+        )
       }
     }
   }
@@ -1273,6 +1278,7 @@ class FileStreamSourceSuite extends FileStreamSourceTest {
         .text(src.getCanonicalPath)
 
       def startQuery(): StreamingQuery = {
+        // NOTE: the test uses the deprecated Trigger.Once() by intention, do not change.
         df.writeStream
           .format("parquet")
           .trigger(Trigger.Once)
@@ -1328,6 +1334,7 @@ class FileStreamSourceSuite extends FileStreamSourceTest {
         .text(src.getCanonicalPath)
 
       def startTriggerOnceQuery(): StreamingQuery = {
+        // NOTE: the test uses the deprecated Trigger.Once() by intention, do not change.
         df.writeStream
           .foreachBatch((_: Dataset[Row], _: Long) => {})
           .trigger(Trigger.Once)
@@ -1433,7 +1440,7 @@ class FileStreamSourceSuite extends FileStreamSourceTest {
 
     // This is to avoid running a spark job to list of files in parallel
     // by the InMemoryFileIndex.
-    spark.sessionState.conf.setConf(SQLConf.PARALLEL_PARTITION_DISCOVERY_THRESHOLD, numFiles * 2)
+    spark.conf.set(SQLConf.PARALLEL_PARTITION_DISCOVERY_THRESHOLD, numFiles * 2)
 
     withTempDirs { case (root, tmp) =>
       val src = new File(root, "a=1")
@@ -1758,69 +1765,69 @@ class FileStreamSourceSuite extends FileStreamSourceTest {
   test("SeenFilesMap") {
     val map = new SeenFilesMap(maxAgeMs = 10, fileNameOnly = false)
 
-    map.add("a", 5)
+    map.add(sp("a"), 5)
     assert(map.size == 1)
     map.purge()
     assert(map.size == 1)
 
     // Add a new entry and purge should be no-op, since the gap is exactly 10 ms.
-    map.add("b", 15)
+    map.add(sp("b"), 15)
     assert(map.size == 2)
     map.purge()
     assert(map.size == 2)
 
     // Add a new entry that's more than 10 ms than the first entry. We should be able to purge now.
-    map.add("c", 16)
+    map.add(sp("c"), 16)
     assert(map.size == 3)
     map.purge()
     assert(map.size == 2)
 
     // Override existing entry shouldn't change the size
-    map.add("c", 25)
+    map.add(sp("c"), 25)
     assert(map.size == 2)
 
     // Not a new file because we have seen c before
-    assert(!map.isNewFile("c", 20))
+    assert(!map.isNewFile(sp("c"), 20))
 
     // Not a new file because timestamp is too old
-    assert(!map.isNewFile("d", 5))
+    assert(!map.isNewFile(sp("d"), 5))
 
     // Finally a new file: never seen and not too old
-    assert(map.isNewFile("e", 20))
+    assert(map.isNewFile(sp("e"), 20))
   }
 
   test("SeenFilesMap with fileNameOnly = true") {
     val map = new SeenFilesMap(maxAgeMs = 10, fileNameOnly = true)
 
-    map.add("file:///a/b/c/d", 5)
-    map.add("file:///a/b/c/e", 5)
+    map.add(sp("file:///a/b/c/d"), 5)
+    map.add(sp("file:///a/b/c/e"), 5)
     assert(map.size === 2)
 
-    assert(!map.isNewFile("d", 5))
-    assert(!map.isNewFile("file:///d", 5))
-    assert(!map.isNewFile("file:///x/d", 5))
-    assert(!map.isNewFile("file:///x/y/d", 5))
+    assert(!map.isNewFile(sp("d"), 5))
+    assert(!map.isNewFile(sp("file:///d"), 5))
+    assert(!map.isNewFile(sp("file:///x/d"), 5))
+    assert(!map.isNewFile(sp("file:///x/y/d"), 5))
 
-    map.add("s3:///bucket/d", 5)
-    map.add("s3n:///bucket/d", 5)
-    map.add("s3a:///bucket/d", 5)
+    map.add(sp("s3:///bucket/d"), 5)
+    map.add(sp("s3n:///bucket/d"), 5)
+    map.add(sp("s3a:///bucket/d"), 5)
     assert(map.size === 2)
   }
 
   test("SeenFilesMap should only consider a file old if it is earlier than last purge time") {
     val map = new SeenFilesMap(maxAgeMs = 10, fileNameOnly = false)
 
-    map.add("a", 20)
+    map.add(sp("a"), 20)
     assert(map.size == 1)
 
     // Timestamp 5 should still considered a new file because purge time should be 0
-    assert(map.isNewFile("b", 9))
-    assert(map.isNewFile("b", 10))
+    assert(map.isNewFile(sp("b"), 9))
+    assert(map.isNewFile(sp("b"), 10))
 
     // Once purge, purge time should be 10 and then b would be a old file if it is less than 10.
     map.purge()
-    assert(!map.isNewFile("b", 9))
-    assert(map.isNewFile("b", 10))
+    assert(!map.isNewFile(sp("b"), 9))
+    assert(map.isNewFile(sp("b"), 10))
   }
 
   test("do not recheck that files exist during getBatch") {
@@ -2053,7 +2060,7 @@ class FileStreamSourceSuite extends FileStreamSourceTest {
             AddFilesToFileStreamSinkLog(fileSystem, srcPath, sinkLog, 0) { path =>
               path.getName.startsWith("keep1")
             },
-            ExpectFailure[UnsupportedOperationException](
+            ExpectFailure[SparkUnsupportedOperationException](
               t => assert(t.getMessage.startsWith("Clean up source files is not supported")),
               isFatalError = false)
           )
@@ -2194,7 +2201,7 @@ class FileStreamSourceSuite extends FileStreamSourceTest {
           val files = metadataLog.get(batchId).getOrElse(Array.empty[FileEntry])
           assert(files.forall(_.batchId == batchId))
 
-          val actualInputFiles = files.map { p => new Path(p.path).toUri.getPath }
+          val actualInputFiles = files.map { p => p.sparkPath.toUri.getPath }
           val expectedInputFiles = inputFiles.slice(batchId.toInt * 10, batchId.toInt * 10 + 10)
             .map(_.getCanonicalPath)
           assert(actualInputFiles === expectedInputFiles)

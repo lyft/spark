@@ -40,7 +40,10 @@ Data Types
     NullType
     ShortType
     StringType
+    CharType
+    VarcharType
     StructField
     StructType
     TimestampType
+    TimestampNTZType
     DayTimeIntervalType

@@ -156,8 +156,11 @@ trait SQLInsertTestSuite extends QueryTest with SQLTestUtils {
     withTable("t1") {
       val cols = Seq("c1", "c2", "c3")
       createTable("t1", cols, Seq("int", "long", "string"))
-      val e1 = intercept[AnalysisException](sql(s"INSERT INTO t1 (c1, c2, c2) values(1, 2, 3)"))
-      assert(e1.getMessage.contains("Found duplicate column(s) in the column list: `c2`"))
+      checkError(
+        exception = intercept[AnalysisException](
+          sql(s"INSERT INTO t1 (c1, c2, c2) values(1, 2, 3)")),
+        errorClass = "COLUMN_ALREADY_EXISTS",
+        parameters = Map("columnName" -> "`c2`"))
     }
   }
 
@@ -165,40 +168,59 @@ trait SQLInsertTestSuite extends QueryTest with SQLTestUtils {
     withTable("t1") {
       val cols = Seq("c1", "c2", "c3")
       createTable("t1", cols, Seq("int", "long", "string"))
-      val e1 = intercept[AnalysisException](sql(s"INSERT INTO t1 (c1, c2, c4) values(1, 2, 3)"))
-      assert(e1.getMessage.contains("Cannot resolve column name c4"))
+      checkError(
+        exception =
+          intercept[AnalysisException](sql(s"INSERT INTO t1 (c1, c2, c4) values(1, 2, 3)")),
+        errorClass = "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+        sqlState = None,
+        parameters = Map("objectName" -> "`c4`", "proposal" -> "`c1`, `c2`, `c3`"),
+        context = ExpectedContext(
+          fragment = "INSERT INTO t1 (c1, c2, c4)", start = 0, stop = 26
+        ))
     }
   }
 
   test("insert with column list - mismatched column list size") {
-    val msg = "Cannot write to table due to mismatched user specified column size"
-    withTable("t1") {
-      val cols = Seq("c1", "c2", "c3")
-      createTable("t1", cols, Seq("int", "long", "string"))
-      val e1 = intercept[AnalysisException](sql(s"INSERT INTO t1 (c1, c2) values(1, 2, 3)"))
-      assert(e1.getMessage.contains(msg))
-      val e2 = intercept[AnalysisException](sql(s"INSERT INTO t1 (c1, c2, c3) values(1, 2)"))
-      assert(e2.getMessage.contains(msg))
+    val msgs = Seq("Cannot write to table due to mismatched user specified column size",
+      "expected 3 columns but found")
+    def test: Unit = {
+      withTable("t1") {
+        val cols = Seq("c1", "c2", "c3")
+        createTable("t1", cols, Seq("int", "long", "string"))
+        val e1 = intercept[AnalysisException](sql(s"INSERT INTO t1 (c1, c2) values(1, 2, 3)"))
+        assert(e1.getMessage.contains(msgs(0)) || e1.getMessage.contains(msgs(1)))
+        val e2 = intercept[AnalysisException](sql(s"INSERT INTO t1 (c1, c2, c3) values(1, 2)"))
+        assert(e2.getMessage.contains(msgs(0)) || e2.getMessage.contains(msgs(1)))
+      }
+    }
+    withSQLConf(SQLConf.ENABLE_DEFAULT_COLUMNS.key -> "false") {
+      test
+    }
+    withSQLConf(SQLConf.ENABLE_DEFAULT_COLUMNS.key -> "true") {
+      test
     }
   }
 
-  test("insert with column list - mismatched target table out size after rewritten query") {
-    val v2Msg = "Cannot write to 'testcat.t1', not enough data columns:"
+  test("insert with column list - missing columns") {
+    val v2Msg = "Cannot write incompatible data to table 'testcat.t1'"
     val cols = Seq("c1", "c2", "c3", "c4")
 
     withTable("t1") {
       createTable("t1", cols, Seq.fill(4)("int"))
-      val e1 = intercept[AnalysisException](sql(s"INSERT INTO t1 (c1) values(1)"))
+      val e1 = intercept[AnalysisException](sql(s"INSERT INTO t1 values(1)"))
       assert(e1.getMessage.contains("target table has 4 column(s) but the inserted data has 1") ||
+        e1.getMessage.contains("expected 4 columns but found 1") ||
+        e1.getMessage.contains("not enough data columns") ||
         e1.getMessage.contains(v2Msg))
     }
 
     withTable("t1") {
       createTable("t1", cols, Seq.fill(4)("int"), cols.takeRight(2))
       val e1 = intercept[AnalysisException] {
-        sql(s"INSERT INTO t1 partition(c3=3, c4=4) (c1) values(1)")
+        sql(s"INSERT INTO t1 partition(c3=3, c4=4) values(1)")
       }
       assert(e1.getMessage.contains("target table has 4 column(s) but the inserted data has 3") ||
+        e1.getMessage.contains("not enough data columns") ||
         e1.getMessage.contains(v2Msg))
     }
   }
@@ -329,6 +351,35 @@ trait SQLInsertTestSuite extends QueryTest with SQLTestUtils {
       }
     }
   }
+
+  test("SPARK-41982: treat the partition field as string literal " +
+    "when keepPartitionSpecAsStringLiteral is enabled") {
+    withSQLConf(SQLConf.LEGACY_KEEP_PARTITION_SPEC_AS_STRING_LITERAL.key -> "true") {
+      withTable("t") {
+        sql("create table t(i string, j int) using orc partitioned by (dt string)")
+        sql("insert into t partition(dt=08) values('a', 10)")
+        Seq(
+          "select * from t where dt='08'",
+          "select * from t where dt=08"
+        ).foreach { query =>
+          checkAnswer(sql(query), Seq(Row("a", 10, "08")))
+        }
+        val e = intercept[AnalysisException](sql("alter table t drop partition(dt='8')"))
+        assert(e.getMessage.contains("PARTITIONS_NOT_FOUND"))
+      }
+    }
+
+    withSQLConf(SQLConf.LEGACY_KEEP_PARTITION_SPEC_AS_STRING_LITERAL.key -> "false") {
+      withTable("t") {
+        sql("create table t(i string, j int) using orc partitioned by (dt string)")
+        sql("insert into t partition(dt=08) values('a', 10)")
+        checkAnswer(sql("select * from t where dt='08'"), sql("select * from t where dt='07'"))
+        checkAnswer(sql("select * from t where dt=08"), Seq(Row("a", 10, "8")))
+        val e = intercept[AnalysisException](sql("alter table t drop partition(dt='08')"))
+        assert(e.getMessage.contains("PARTITIONS_NOT_FOUND"))
+      }
+    }
+  }
 }
 
 class FileSourceSQLInsertTestSuite extends SQLInsertTestSuite with SharedSparkSession {
@@ -346,5 +397,17 @@ class DSV2SQLInsertTestSuite extends SQLInsertTestSuite with SharedSparkSession 
     super.sparkConf
       .set("spark.sql.catalog.testcat", classOf[InMemoryPartitionTableCatalog].getName)
       .set(SQLConf.DEFAULT_CATALOG.key, "testcat")
+  }
+
+  test("static partition column name should not be used in the column list") {
+    withTable("t") {
+      sql(s"CREATE TABLE t(i STRING, c string) USING PARQUET PARTITIONED BY (c)")
+      checkError(
+        exception = intercept[AnalysisException] {
+          sql("INSERT OVERWRITE t PARTITION (c='1') (c) VALUES ('2')")
+        },
+        errorClass = "STATIC_PARTITION_COLUMN_IN_INSERT_COLUMN_LIST",
+        parameters = Map("staticName" -> "c"))
+    }
   }
 }

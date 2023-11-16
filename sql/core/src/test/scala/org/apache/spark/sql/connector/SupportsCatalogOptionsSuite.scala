@@ -27,7 +27,7 @@ import org.scalatest.BeforeAndAfter
 
 import org.apache.spark.SparkException
 import org.apache.spark.sql.{AnalysisException, DataFrame, QueryTest, SaveMode}
-import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
+import org.apache.spark.sql.catalyst.analysis.{NoSuchTableException, TableAlreadyExistsException}
 import org.apache.spark.sql.catalyst.plans.logical.{AppendData, LogicalPlan, OverwriteByExpression}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.connector.catalog.{Identifier, InMemoryTableCatalog, SupportsCatalogOptions, TableCatalog}
@@ -76,7 +76,7 @@ class SupportsCatalogOptionsSuite extends QueryTest with SharedSparkSession with
       saveMode: SaveMode,
       withCatalogOption: Option[String],
       partitionBy: Seq[String]): Unit = {
-    val df = spark.range(10).withColumn("part", Symbol("id") % 5)
+    val df = spark.range(10).withColumn("part", $"id" % 5)
     val dfw = df.write.format(format).mode(saveMode).option("name", "t1")
     withCatalogOption.foreach(cName => dfw.option("catalog", cName))
     dfw.partitionBy(partitionBy: _*).save()
@@ -141,7 +141,7 @@ class SupportsCatalogOptionsSuite extends QueryTest with SharedSparkSession with
 
   test("Ignore mode if table exists - session catalog") {
     sql(s"create table t1 (id bigint) using $format")
-    val df = spark.range(10).withColumn("part", Symbol("id") % 5)
+    val df = spark.range(10).withColumn("part", $"id" % 5)
     val dfw = df.write.format(format).mode(SaveMode.Ignore).option("name", "t1")
     dfw.save()
 
@@ -153,7 +153,7 @@ class SupportsCatalogOptionsSuite extends QueryTest with SharedSparkSession with
 
   test("Ignore mode if table exists - testcat catalog") {
     sql(s"create table $catalogName.t1 (id bigint) using $format")
-    val df = spark.range(10).withColumn("part", Symbol("id") % 5)
+    val df = spark.range(10).withColumn("part", $"id" % 5)
     val dfw = df.write.format(format).mode(SaveMode.Ignore).option("name", "t1")
     dfw.option("catalog", catalogName).save()
 
@@ -212,6 +212,13 @@ class SupportsCatalogOptionsSuite extends QueryTest with SharedSparkSession with
     sql(s"create table $catalogName.t1 (id bigint) using $format")
     val df = load("t1", Some(catalogName))
     checkV2Identifiers(df.logicalPlan)
+  }
+
+  test("DataFrameReader read non-existent table") {
+    val e = intercept[NoSuchTableException] {
+      spark.read.format(format).option("name", "non_existent_table").load()
+    }
+    checkErrorTableNotFound(e, "`default`.`non_existent_table`")
   }
 
   test("DataFrameWriter creates v2Relation with identifiers") {

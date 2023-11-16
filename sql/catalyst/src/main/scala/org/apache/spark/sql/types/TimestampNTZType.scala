@@ -17,8 +17,10 @@
 
 package org.apache.spark.sql.types
 
-import scala.math.Ordering
 import scala.reflect.runtime.universe.typeTag
+
+import org.apache.spark.annotation.Unstable
+import org.apache.spark.sql.catalyst.types.{PhysicalDataType, PhysicalLongType}
 
 /**
  * The timestamp without time zone type represents a local time in microsecond precision,
@@ -27,8 +29,10 @@ import scala.reflect.runtime.universe.typeTag
  * To represent an absolute point in time, use `TimestampType` instead.
  *
  * Please use the singleton `DataTypes.TimestampNTZType` to refer the type.
+ * @since 3.4.0
  */
-private[spark] class TimestampNTZType private() extends DatetimeType {
+@Unstable
+class TimestampNTZType private() extends DatetimeType {
   /**
    * Internally, a timestamp is stored as the number of microseconds from
    * the epoch of 1970-01-01T00:00:00.000000(Unix system time zero)
@@ -44,6 +48,8 @@ private[spark] class TimestampNTZType private() extends DatetimeType {
    */
   override def defaultSize: Int = 8
 
+  private[sql] override def physicalDataType: PhysicalDataType = PhysicalLongType
+
   override def typeName: String = "timestamp_ntz"
 
   private[spark] override def asNullable: TimestampNTZType = this
@@ -54,5 +60,8 @@ private[spark] class TimestampNTZType private() extends DatetimeType {
  * the TimestampNTZType class. Otherwise, the companion object would be of type
  * "TimestampNTZType" in byte code. Defined with a private constructor so the companion
  * object is the only possible instantiation.
+ *
+ * @since 3.4.0
  */
-private[spark] case object TimestampNTZType extends TimestampNTZType
+@Unstable
+case object TimestampNTZType extends TimestampNTZType

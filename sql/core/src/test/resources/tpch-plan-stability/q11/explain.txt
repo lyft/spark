@@ -11,19 +11,19 @@
                      :  +- * BroadcastHashJoin Inner BuildRight (8)
                      :     :- * Filter (3)
                      :     :  +- * ColumnarToRow (2)
-                     :     :     +- Scan parquet default.partsupp (1)
+                     :     :     +- Scan parquet spark_catalog.default.partsupp (1)
                      :     +- BroadcastExchange (7)
                      :        +- * Filter (6)
                      :           +- * ColumnarToRow (5)
-                     :              +- Scan parquet default.supplier (4)
+                     :              +- Scan parquet spark_catalog.default.supplier (4)
                      +- BroadcastExchange (14)
                         +- * Project (13)
                            +- * Filter (12)
                               +- * ColumnarToRow (11)
-                                 +- Scan parquet default.nation (10)
+                                 +- Scan parquet spark_catalog.default.nation (10)
 
 
-(1) Scan parquet default.partsupp
+(1) Scan parquet spark_catalog.default.partsupp
 Output [4]: [ps_partkey#1, ps_suppkey#2, ps_availqty#3, ps_supplycost#4]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/partsupp]
@@ -37,7 +37,7 @@ Input [4]: [ps_partkey#1, ps_suppkey#2, ps_availqty#3, ps_supplycost#4]
 Input [4]: [ps_partkey#1, ps_suppkey#2, ps_availqty#3, ps_supplycost#4]
 Condition : isnotnull(ps_suppkey#2)
 
-(4) Scan parquet default.supplier
+(4) Scan parquet spark_catalog.default.supplier
 Output [2]: [s_suppkey#5, s_nationkey#6]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/supplier]
@@ -58,13 +58,14 @@ Arguments: HashedRelationBroadcastMode(List(input[0, bigint, false]),false), [pl
 (8) BroadcastHashJoin [codegen id : 3]
 Left keys [1]: [ps_suppkey#2]
 Right keys [1]: [s_suppkey#5]
+Join type: Inner
 Join condition: None
 
 (9) Project [codegen id : 3]
 Output [4]: [ps_partkey#1, ps_availqty#3, ps_supplycost#4, s_nationkey#6]
 Input [6]: [ps_partkey#1, ps_suppkey#2, ps_availqty#3, ps_supplycost#4, s_suppkey#5, s_nationkey#6]
 
-(10) Scan parquet default.nation
+(10) Scan parquet spark_catalog.default.nation
 Output [2]: [n_nationkey#7, n_name#8]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/nation]
@@ -89,6 +90,7 @@ Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),false), [pla
 (15) BroadcastHashJoin [codegen id : 3]
 Left keys [1]: [s_nationkey#6]
 Right keys [1]: [n_nationkey#7]
+Join type: Inner
 Join condition: None
 
 (16) Project [codegen id : 3]
@@ -98,7 +100,7 @@ Input [5]: [ps_partkey#1, ps_availqty#3, ps_supplycost#4, s_nationkey#6, n_natio
 (17) HashAggregate [codegen id : 3]
 Input [3]: [ps_partkey#1, ps_availqty#3, ps_supplycost#4]
 Keys [1]: [ps_partkey#1]
-Functions [1]: [partial_sum(CheckOverflow((promote_precision(ps_supplycost#4) * promote_precision(cast(ps_availqty#3 as decimal(10,0)))), DecimalType(21,0)))]
+Functions [1]: [partial_sum((ps_supplycost#4 * cast(ps_availqty#3 as decimal(10,0))))]
 Aggregate Attributes [2]: [sum#9, isEmpty#10]
 Results [3]: [ps_partkey#1, sum#11, isEmpty#12]
 
@@ -109,9 +111,9 @@ Arguments: hashpartitioning(ps_partkey#1, 5), ENSURE_REQUIREMENTS, [plan_id=3]
 (19) HashAggregate [codegen id : 4]
 Input [3]: [ps_partkey#1, sum#11, isEmpty#12]
 Keys [1]: [ps_partkey#1]
-Functions [1]: [sum(CheckOverflow((promote_precision(ps_supplycost#4) * promote_precision(cast(ps_availqty#3 as decimal(10,0)))), DecimalType(21,0)))]
-Aggregate Attributes [1]: [sum(CheckOverflow((promote_precision(ps_supplycost#4) * promote_precision(cast(ps_availqty#3 as decimal(10,0)))), DecimalType(21,0)))#13]
-Results [2]: [ps_partkey#1, sum(CheckOverflow((promote_precision(ps_supplycost#4) * promote_precision(cast(ps_availqty#3 as decimal(10,0)))), DecimalType(21,0)))#13 AS value#14]
+Functions [1]: [sum((ps_supplycost#4 * cast(ps_availqty#3 as decimal(10,0))))]
+Aggregate Attributes [1]: [sum((ps_supplycost#4 * cast(ps_availqty#3 as decimal(10,0))))#13]
+Results [2]: [ps_partkey#1, sum((ps_supplycost#4 * cast(ps_availqty#3 as decimal(10,0))))#13 AS value#14]
 
 (20) Filter [codegen id : 4]
 Input [2]: [ps_partkey#1, value#14]
@@ -137,12 +139,12 @@ Subquery:1 Hosting operator id = 20 Hosting Expression = Subquery scalar-subquer
             :  +- * BroadcastHashJoin Inner BuildRight (27)
             :     :- * Filter (25)
             :     :  +- * ColumnarToRow (24)
-            :     :     +- Scan parquet default.partsupp (23)
+            :     :     +- Scan parquet spark_catalog.default.partsupp (23)
             :     +- ReusedExchange (26)
             +- ReusedExchange (29)
 
 
-(23) Scan parquet default.partsupp
+(23) Scan parquet spark_catalog.default.partsupp
 Output [3]: [ps_suppkey#17, ps_availqty#18, ps_supplycost#19]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/partsupp]
@@ -162,6 +164,7 @@ Output [2]: [s_suppkey#20, s_nationkey#21]
 (27) BroadcastHashJoin [codegen id : 3]
 Left keys [1]: [ps_suppkey#17]
 Right keys [1]: [s_suppkey#20]
+Join type: Inner
 Join condition: None
 
 (28) Project [codegen id : 3]
@@ -174,6 +177,7 @@ Output [1]: [n_nationkey#22]
 (30) BroadcastHashJoin [codegen id : 3]
 Left keys [1]: [s_nationkey#21]
 Right keys [1]: [n_nationkey#22]
+Join type: Inner
 Join condition: None
 
 (31) Project [codegen id : 3]
@@ -183,7 +187,7 @@ Input [4]: [ps_availqty#18, ps_supplycost#19, s_nationkey#21, n_nationkey#22]
 (32) HashAggregate [codegen id : 3]
 Input [2]: [ps_availqty#18, ps_supplycost#19]
 Keys: []
-Functions [1]: [partial_sum(CheckOverflow((promote_precision(ps_supplycost#19) * promote_precision(cast(ps_availqty#18 as decimal(10,0)))), DecimalType(21,0)))]
+Functions [1]: [partial_sum((ps_supplycost#19 * cast(ps_availqty#18 as decimal(10,0))))]
 Aggregate Attributes [2]: [sum#23, isEmpty#24]
 Results [2]: [sum#25, isEmpty#26]
 
@@ -194,8 +198,8 @@ Arguments: SinglePartition, ENSURE_REQUIREMENTS, [plan_id=5]
 (34) HashAggregate [codegen id : 4]
 Input [2]: [sum#25, isEmpty#26]
 Keys: []
-Functions [1]: [sum(CheckOverflow((promote_precision(ps_supplycost#19) * promote_precision(cast(ps_availqty#18 as decimal(10,0)))), DecimalType(21,0)))]
-Aggregate Attributes [1]: [sum(CheckOverflow((promote_precision(ps_supplycost#19) * promote_precision(cast(ps_availqty#18 as decimal(10,0)))), DecimalType(21,0)))#27]
-Results [1]: [CheckOverflow((promote_precision(cast(sum(CheckOverflow((promote_precision(ps_supplycost#19) * promote_precision(cast(ps_availqty#18 as decimal(10,0)))), DecimalType(21,0)))#27 as decimal(38,10))) * 0.0001000000), DecimalType(38,6)) AS (sum((ps_supplycost * ps_availqty)) * 0.0001000000)#28]
+Functions [1]: [sum((ps_supplycost#19 * cast(ps_availqty#18 as decimal(10,0))))]
+Aggregate Attributes [1]: [sum((ps_supplycost#19 * cast(ps_availqty#18 as decimal(10,0))))#27]
+Results [1]: [(sum((ps_supplycost#19 * cast(ps_availqty#18 as decimal(10,0))))#27 * 0.0001000000) AS (sum((ps_supplycost * ps_availqty)) * 0.0001000000)#28]
 
 

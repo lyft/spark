@@ -53,14 +53,6 @@ class DecimalExpressionSuite extends SparkFunSuite with ExpressionEvalHelper {
     }
   }
 
-  test("PromotePrecision") {
-    val d1 = Decimal("10.1")
-    checkEvaluation(PromotePrecision(Literal(d1)), d1)
-    val d2 = Decimal(101, 3, 1)
-    checkEvaluation(PromotePrecision(Literal(d2)), d2)
-    checkEvaluation(PromotePrecision(Literal.create(null, DecimalType(2, 1))), null)
-  }
-
   test("CheckOverflow") {
     val d1 = Decimal("10.1")
     checkEvaluation(CheckOverflow(Literal(d1), DecimalType(4, 0), true), Decimal("10"))
@@ -93,13 +85,13 @@ class DecimalExpressionSuite extends SparkFunSuite with ExpressionEvalHelper {
       startIndex = Some(7),
       stopIndex = Some(30),
       sqlText = Some(query))
-
     val expr1 = withOrigin(origin) {
       CheckOverflow(Literal(d), DecimalType(4, 3), false)
     }
     checkExceptionInExpression[ArithmeticException](expr1, query)
 
-    val expr2 = CheckOverflowInSum(Literal(d), DecimalType(4, 3), false, queryContext = query)
+    val expr2 = CheckOverflowInSum(
+      Literal(d), DecimalType(4, 3), false, context = origin.context)
     checkExceptionInExpression[ArithmeticException](expr2, query)
   }
 }

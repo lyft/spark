@@ -23,6 +23,7 @@ import org.apache.orc.mapred.{OrcList, OrcMap, OrcStruct, OrcTimestamp}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{SpecificInternalRow, UnsafeArrayData}
 import org.apache.spark.sql.catalyst.util._
+import org.apache.spark.sql.catalyst.util.ResolveDefaultColumns._
 import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
@@ -41,12 +42,27 @@ class OrcDeserializer(
   //   is always null in this case
   // - a function that updates target column `index` otherwise.
   private val fieldWriters: Array[WritableComparable[_] => Unit] = {
+    // Assume we create a table backed by Orc files. Then if we later run a command "ALTER TABLE t
+    // ADD COLUMN c DEFAULT <value>" on the Orc table, this adds one field to the Catalyst schema.
+    // Then if we query the old files with the new Catalyst schema, we should only apply the
+    // existence default value to the columns whose IDs are not explicitly requested.
+    if (requiredSchema.hasExistenceDefaultValues) {
+      for (i <- 0 until requiredSchema.existenceDefaultValues.size) {
+        requiredSchema.existenceDefaultsBitmask(i) =
+          if (requestedColIds(i) != -1) {
+            false
+          } else {
+            requiredSchema.existenceDefaultValues(i) != null
+          }
+      }
+    }
     requiredSchema.zipWithIndex
       .map { case (f, index) =>
         if (requestedColIds(index) == -1) {
           null
         } else {
-          val writer = newWriter(f.dataType, new RowUpdater(resultRow))
+          val rowUpdater = new RowUpdater(resultRow)
+          val writer = newWriter(f.dataType, rowUpdater)
           (value: WritableComparable[_]) => writer(index, value)
         }
       }.toArray
@@ -65,6 +81,7 @@ class OrcDeserializer(
       }
       targetColumnIndex += 1
     }
+    applyExistenceDefaultValuesToRow(requiredSchema, resultRow)
     resultRow
   }
 
@@ -81,6 +98,7 @@ class OrcDeserializer(
       }
       targetColumnIndex += 1
     }
+    applyExistenceDefaultValuesToRow(requiredSchema, resultRow)
     resultRow
   }
 
@@ -251,7 +269,7 @@ class OrcDeserializer(
     def setFloat(ordinal: Int, value: Float): Unit = set(ordinal, value)
   }
 
-  final class RowUpdater(row: InternalRow) extends CatalystDataUpdater {
+  class RowUpdater(row: InternalRow) extends CatalystDataUpdater {
     override def setNullAt(ordinal: Int): Unit = row.setNullAt(ordinal)
     override def set(ordinal: Int, value: Any): Unit = row.update(ordinal, value)
 

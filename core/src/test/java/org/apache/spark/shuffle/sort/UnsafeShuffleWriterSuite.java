@@ -70,7 +70,8 @@ public class UnsafeShuffleWriterSuite implements ShuffleChecksumTestHelper {
   long[] partitionSizesInMergedFile;
   final LinkedList<File> spillFilesCreated = new LinkedList<>();
   SparkConf conf;
-  final Serializer serializer = new KryoSerializer(new SparkConf());
+  final Serializer serializer =
+    new KryoSerializer(new SparkConf().set("spark.kryo.unsafe", "false"));
   TaskMetrics taskMetrics;
 
   @Mock(answer = RETURNS_SMART_NULLS) BlockManager blockManager;
@@ -97,7 +98,8 @@ public class UnsafeShuffleWriterSuite implements ShuffleChecksumTestHelper {
     spillFilesCreated.clear();
     conf = new SparkConf()
       .set(package$.MODULE$.BUFFER_PAGESIZE().key(), "1m")
-      .set(package$.MODULE$.MEMORY_OFFHEAP_ENABLED(), false);
+      .set(package$.MODULE$.MEMORY_OFFHEAP_ENABLED(), false)
+      .set("spark.kryo.unsafe", "false");
     taskMetrics = new TaskMetrics();
     memoryManager = new TestMemoryManager(conf);
     taskMemoryManager = new TaskMemoryManager(memoryManager, 0);
@@ -181,7 +183,8 @@ public class UnsafeShuffleWriterSuite implements ShuffleChecksumTestHelper {
   private UnsafeShuffleWriter<Object, Object> createWriter(
     boolean transferToEnabled,
     IndexShuffleBlockResolver blockResolver) throws SparkException {
-    conf.set("spark.file.transferTo", String.valueOf(transferToEnabled));
+    conf.set(package$.MODULE$.SHUFFLE_MERGE_PREFER_NIO().key(),
+      String.valueOf(transferToEnabled));
     return new UnsafeShuffleWriter<>(
       blockManager,
       taskMemoryManager,
@@ -227,9 +230,9 @@ public class UnsafeShuffleWriterSuite implements ShuffleChecksumTestHelper {
     return recordsList;
   }
 
-  @Test(expected=IllegalStateException.class)
+  @Test
   public void mustCallWriteBeforeSuccessfulStop() throws IOException, SparkException {
-    createWriter(false).stop(true);
+    assertThrows(IllegalStateException.class, () -> createWriter(false).stop(true));
   }
 
   @Test
@@ -240,7 +243,7 @@ public class UnsafeShuffleWriterSuite implements ShuffleChecksumTestHelper {
   static class PandaException extends RuntimeException {
   }
 
-  @Test(expected=PandaException.class)
+  @Test
   public void writeFailurePropagates() throws Exception {
     class BadRecords extends scala.collection.AbstractIterator<Product2<Object, Object>> {
       @Override public boolean hasNext() {
@@ -251,7 +254,7 @@ public class UnsafeShuffleWriterSuite implements ShuffleChecksumTestHelper {
       }
     }
     final UnsafeShuffleWriter<Object, Object> writer = createWriter(true);
-    writer.write(new BadRecords());
+    assertThrows(PandaException.class, () -> writer.write(new BadRecords()));
   }
 
   @Test

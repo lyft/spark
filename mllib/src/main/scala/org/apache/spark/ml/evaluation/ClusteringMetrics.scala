@@ -21,7 +21,7 @@ import org.apache.spark.SparkContext
 import org.apache.spark.annotation.Since
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.linalg.{BLAS, DenseVector, Vector, Vectors}
-import org.apache.spark.ml.util.MetadataUtils
+import org.apache.spark.ml.util.DatasetUtils._
 import org.apache.spark.sql.{Column, DataFrame, Dataset}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.DoubleType
@@ -293,7 +293,7 @@ private[evaluation] object SquaredEuclideanSilhouette extends Silhouette {
       predictionCol: String,
       featuresCol: String,
       weightCol: String): Map[Double, ClusterStats] = {
-    val numFeatures = MetadataUtils.getNumFeatures(df, featuresCol)
+    val numFeatures = getNumFeatures(df, featuresCol)
     val clustersStatsRDD = df.select(
       col(predictionCol).cast(DoubleType), col(featuresCol), col("squaredNorm"), col(weightCol))
       .rdd
@@ -397,7 +397,7 @@ private[evaluation] object SquaredEuclideanSilhouette extends Silhouette {
     val clustersStatsMap = SquaredEuclideanSilhouette
       .computeClusterStats(dfWithSquaredNorm, predictionCol, featuresCol, weightCol)
 
-    // Silhouette is reasonable only when the number of clusters is greater then 1
+    // Silhouette is reasonable only when the number of clusters is greater than 1
     assert(clustersStatsMap.size > 1, "Number of clusters must be greater than one.")
 
     val bClustersStatsMap = dataset.sparkSession.sparkContext.broadcast(clustersStatsMap)
@@ -509,7 +509,7 @@ private[evaluation] object CosineSilhouette extends Silhouette {
       featuresCol: String,
       predictionCol: String,
       weightCol: String): Map[Double, (Vector, Double)] = {
-    val numFeatures = MetadataUtils.getNumFeatures(df, featuresCol)
+    val numFeatures = getNumFeatures(df, featuresCol)
     val clustersStatsRDD = df.select(
       col(predictionCol).cast(DoubleType), col(normalizedFeaturesColName), col(weightCol))
       .rdd
@@ -604,7 +604,7 @@ private[evaluation] object CosineSilhouette extends Silhouette {
     val clustersStatsMap = computeClusterStats(dfWithNormalizedFeatures, featuresCol,
       predictionCol, weightCol)
 
-    // Silhouette is reasonable only when the number of clusters is greater then 1
+    // Silhouette is reasonable only when the number of clusters is greater than 1
     assert(clustersStatsMap.size > 1, "Number of clusters must be greater than one.")
 
     val bClustersStatsMap = dataset.sparkSession.sparkContext.broadcast(clustersStatsMap)

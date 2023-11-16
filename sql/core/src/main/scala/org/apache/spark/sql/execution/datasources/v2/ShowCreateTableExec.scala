@@ -59,7 +59,8 @@ case class ShowCreateTableExec(
   }
 
   private def showTableDataColumns(table: Table, builder: StringBuilder): Unit = {
-    val columns = CharVarcharUtils.getRawSchema(table.schema(), conf).fields.map(_.toDDL)
+    import org.apache.spark.sql.connector.catalog.CatalogV2Implicits._
+    val columns = CharVarcharUtils.getRawSchema(table.columns.asSchema, conf).fields.map(_.toDDL)
     builder ++= concatByMultiLines(columns)
   }
 
@@ -133,7 +134,7 @@ case class ShowCreateTableExec(
         && !key.startsWith(TableCatalog.OPTION_PREFIX)
         && !tableOptions.contains(key))
     if (showProps.nonEmpty) {
-      val props = showProps.toSeq.sortBy(_._1).map {
+      val props = conf.redactOptions(showProps.toMap).toSeq.sortBy(_._1).map {
         case (key, value) =>
           s"'${escapeSingleQuotedString(key)}' = '${escapeSingleQuotedString(value)}'"
       }

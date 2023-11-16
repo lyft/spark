@@ -28,7 +28,8 @@ import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
 
-import org.apache.spark.sql.catalyst.{AliasIdentifier, IdentifierWithDatabase}
+import org.apache.spark.QueryContext
+import org.apache.spark.sql.catalyst.{AliasIdentifier, CatalystIdentifier}
 import org.apache.spark.sql.catalyst.ScalaReflection._
 import org.apache.spark.sql.catalyst.catalog.{BucketSpec, CatalogStorageFormat, CatalogTable, CatalogTableType, FunctionResource}
 import org.apache.spark.sql.catalyst.expressions._
@@ -58,94 +59,21 @@ private class MutableInt(var i: Int)
  * objects which contain SQL text.
  */
 case class Origin(
-  line: Option[Int] = None,
-  startPosition: Option[Int] = None,
-  startIndex: Option[Int] = None,
-  stopIndex: Option[Int] = None,
-  sqlText: Option[String] = None,
-  objectType: Option[String] = None,
-  objectName: Option[String] = None) {
+    line: Option[Int] = None,
+    startPosition: Option[Int] = None,
+    startIndex: Option[Int] = None,
+    stopIndex: Option[Int] = None,
+    sqlText: Option[String] = None,
+    objectType: Option[String] = None,
+    objectName: Option[String] = None) {
 
-  /**
-   * The SQL query context of current node. For example:
-   * == SQL of VIEW v1(line 1, position 25) ==
-   * SELECT '' AS five, i.f1, i.f1 - int('2') AS x FROM INT4_TBL i
-   *                          ^^^^^^^^^^^^^^^
-   */
-  lazy val context: String = {
-    // If the query context is missing or incorrect, simply return an empty string.
-    if (sqlText.isEmpty || startIndex.isEmpty || stopIndex.isEmpty ||
-      startIndex.get < 0 || stopIndex.get >= sqlText.get.length || startIndex.get > stopIndex.get) {
-      ""
-    } else {
-      val positionContext = if (line.isDefined && startPosition.isDefined) {
-        // Note that the line number starts from 1, while the start position starts from 0.
-        // Here we increase the start position by 1 for consistency.
-        s"(line ${line.get}, position ${startPosition.get + 1})"
-      } else {
-        ""
-      }
-      val objectContext = if (objectType.isDefined && objectName.isDefined) {
-        s" of ${objectType.get} ${objectName.get}"
-      } else {
-        ""
-      }
-      val builder = new StringBuilder
-      builder ++= s"== SQL$objectContext$positionContext ==\n"
+  lazy val context: SQLQueryContext = SQLQueryContext(
+    line, startPosition, startIndex, stopIndex, sqlText, objectType, objectName)
 
-      val text = sqlText.get
-      val start = math.max(startIndex.get, 0)
-      val stop = math.min(stopIndex.getOrElse(text.length - 1), text.length - 1)
-      // Ideally we should show all the lines which contains the SQL text context of the current
-      // node:
-      // [additional text] [current tree node] [additional text]
-      // However, we need to truncate the additional text in case it is too long. The following
-      // variable is to define the max length of additional text.
-      val maxExtraContextLength = 32
-      val truncatedText = "..."
-      var lineStartIndex = start
-      // Collect the SQL text within the starting line of current Node.
-      // The text is truncated if it is too long.
-      while (lineStartIndex >= 0 &&
-        start - lineStartIndex <= maxExtraContextLength &&
-        text.charAt(lineStartIndex) != '\n') {
-        lineStartIndex -= 1
-      }
-      val startTruncated = start - lineStartIndex > maxExtraContextLength
-      var currentIndex = lineStartIndex
-      if (startTruncated) {
-        currentIndex -= truncatedText.length
-      }
-
-      var lineStopIndex = stop
-      // Collect the SQL text within the ending line of current Node.
-      // The text is truncated if it is too long.
-      while (lineStopIndex < text.length &&
-        lineStopIndex - stop <= maxExtraContextLength &&
-        text.charAt(lineStopIndex) != '\n') {
-        lineStopIndex += 1
-      }
-      val stopTruncated = lineStopIndex - stop > maxExtraContextLength
-
-      val truncatedSubText = (if (startTruncated) truncatedText else "") +
-        text.substring(lineStartIndex + 1, lineStopIndex) +
-        (if (stopTruncated) truncatedText else "")
-      val lines = truncatedSubText.split("\n")
-      lines.foreach { lineText =>
-        builder ++= lineText + "\n"
-        currentIndex += 1
-        (0 until lineText.length).foreach { _ =>
-          if (currentIndex < start) {
-            builder ++= " "
-          } else if (currentIndex >= start && currentIndex <= stop) {
-            builder ++= "^"
-          }
-          currentIndex += 1
-        }
-        builder ++= "\n"
-      }
-      builder.result()
-    }
+  def getQueryContext: Array[QueryContext] = if (context.isValid) {
+    Array(context)
+  } else {
+    Array.empty
   }
 }
 
@@ -691,6 +619,130 @@ abstract class TreeNode[BaseType <: TreeNode[BaseType]] extends Product with Tre
   }
 
   /**
+   * Returns alternative copies of this node where `rule` has been recursively applied to it and all
+   * of its children (pre-order).
+   *
+   * @param rule a function used to generate alternatives for a node
+   * @return     the stream of alternatives
+   */
+  def multiTransformDown(
+      rule: PartialFunction[BaseType, Seq[BaseType]]): Stream[BaseType] = {
+    multiTransformDownWithPruning(AlwaysProcess.fn, UnknownRuleId)(rule)
+  }
+
+  /**
+   * Returns alternative copies of this node where `rule` has been recursively applied to it and all
+   * of its children (pre-order).
+   *
+   * As it is very easy to generate enormous number of alternatives when the input tree is huge or
+   * when the rule returns many alternatives for many nodes, this function returns the alternatives
+   * as a lazy `Stream` to be able to limit the number of alternatives generated at the caller side
+   * as needed.
+   *
+   * The purpose of this function to access the returned alternatives by the rule only if they are
+   * needed so the rule can return a `Stream` whose elements are also lazily calculated.
+   * E.g. `multiTransform*` calls can be nested with the help of
+   * `MultiTransform.generateCartesianProduct()`.
+   *
+   * The rule should not apply or can return a one element `Seq` of original node to indicate that
+   * the original node without any transformation is a valid alternative.
+   *
+   * The rule can return `Seq.empty` to indicate that the original node should be pruned. In this
+   * case `multiTransform()` returns an empty `Stream`.
+   *
+   * Please consider the following examples of `input.multiTransformDown(rule)`:
+   *
+   * We have an input expression:
+   *    `Add(a, b)`
+   *
+   * 1.
+   * We have a simple rule:
+   *   `a` => `Seq(1, 2)`
+   *   `b` => `Seq(10, 20)`
+   *   `Add(a, b)` => `Seq(11, 12, 21, 22)`
+   *
+   * The output is:
+   *   `Stream(11, 12, 21, 22)`
+   *
+   * 2.
+   * In the previous example if we want to generate alternatives of `a` and `b` too then we need to
+   * explicitly add the original `Add(a, b)` expression to the rule:
+   *   `a` => `Seq(1, 2)`
+   *   `b` => `Seq(10, 20)`
+   *   `Add(a, b)` => `Seq(11, 12, 21, 22, Add(a, b))`
+   *
+   * The output is:
+   *   `Stream(11, 12, 21, 22, Add(1, 10), Add(2, 10), Add(1, 20), Add(2, 20))`
+   *
+   * @param rule   a function used to generate alternatives for a node
+   * @param cond   a Lambda expression to prune tree traversals. If `cond.apply` returns false
+   *               on a TreeNode T, skips processing T and its subtree; otherwise, processes
+   *               T and its subtree recursively.
+   * @param ruleId is a unique Id for `rule` to prune unnecessary tree traversals. When it is
+   *               UnknownRuleId, no pruning happens. Otherwise, if `rule` (with id `ruleId`)
+   *               has been marked as in effective on a TreeNode T, skips processing T and its
+   *               subtree. Do not pass it if the rule is not purely functional and reads a
+   *               varying initial state for different invocations.
+   * @return       the stream of alternatives
+   */
+  def multiTransformDownWithPruning(
+      cond: TreePatternBits => Boolean,
+      ruleId: RuleId = UnknownRuleId
+    )(rule: PartialFunction[BaseType, Seq[BaseType]]): Stream[BaseType] = {
+    if (!cond.apply(this) || isRuleIneffective(ruleId)) {
+      return Stream(this)
+    }
+
+    // We could return `Seq(this)` if the `rule` doesn't apply and handle both
+    // - the doesn't apply
+    // - and the rule returns a one element `Seq(originalNode)`
+    // cases together. The returned `Seq` can be a `Stream` and unfortunately it doesn't seem like
+    // there is a way to match on a one element stream without eagerly computing the tail's head.
+    // This contradicts with the purpose of only taking the necessary elements from the
+    // alternatives. I.e. the "multiTransformDown is lazy" test case in `TreeNodeSuite` would fail.
+    // Please note that this behaviour has a downside as well that we can only mark the rule on the
+    // original node ineffective if the rule didn't match.
+    var ruleApplied = true
+    val afterRules = CurrentOrigin.withOrigin(origin) {
+      rule.applyOrElse(this, (_: BaseType) => {
+        ruleApplied = false
+        Seq.empty
+      })
+    }
+
+    val afterRulesStream = if (afterRules.isEmpty) {
+      if (ruleApplied) {
+        // If the rule returned with empty alternatives then prune
+        Stream.empty
+      } else {
+        // If the rule was not applied then keep the original node
+        this.markRuleAsIneffective(ruleId)
+        Stream(this)
+      }
+    } else {
+      // If the rule was applied then use the returned alternatives
+      afterRules.toStream.map { afterRule =>
+        if (this fastEquals afterRule) {
+          this
+        } else {
+          afterRule.copyTagsFrom(this)
+          afterRule
+        }
+      }
+    }
+
+    afterRulesStream.flatMap { afterRule =>
+      if (afterRule.containsChild.nonEmpty) {
+        MultiTransform.generateCartesianProduct(
+            afterRule.children.map(c => () => c.multiTransformDownWithPruning(cond, ruleId)(rule)))
+          .map(afterRule.withNewChildren)
+      } else {
+        Stream(afterRule)
+      }
+    }
+  }
+
+  /**
    * Returns a copy of this node where `f` has been applied to all the nodes in `children`.
    */
   def mapChildren(f: BaseType => BaseType): BaseType = {
@@ -699,86 +751,6 @@ abstract class TreeNode[BaseType <: TreeNode[BaseType]] extends Product with Tre
     } else {
       this
     }
-  }
-
-  /**
-   * Returns a copy of this node where `f` has been applied to all the nodes in `children`.
-   * @param f The transform function to be applied on applicable `TreeNode` elements.
-   * @param forceCopy Whether to force making a copy of the nodes even if no child has been changed.
-   */
-  private def mapChildren(
-      f: BaseType => BaseType,
-      forceCopy: Boolean): BaseType = {
-    var changed = false
-
-    def mapChild(child: Any): Any = child match {
-      case arg: TreeNode[_] if containsChild(arg) =>
-        val newChild = f(arg.asInstanceOf[BaseType])
-        if (forceCopy || !(newChild fastEquals arg)) {
-          changed = true
-          newChild
-        } else {
-          arg
-        }
-      case tuple @ (arg1: TreeNode[_], arg2: TreeNode[_]) =>
-        val newChild1 = if (containsChild(arg1)) {
-          f(arg1.asInstanceOf[BaseType])
-        } else {
-          arg1.asInstanceOf[BaseType]
-        }
-
-        val newChild2 = if (containsChild(arg2)) {
-          f(arg2.asInstanceOf[BaseType])
-        } else {
-          arg2.asInstanceOf[BaseType]
-        }
-
-        if (forceCopy || !(newChild1 fastEquals arg1) || !(newChild2 fastEquals arg2)) {
-          changed = true
-          (newChild1, newChild2)
-        } else {
-          tuple
-        }
-      case other => other
-    }
-
-    val newArgs = mapProductIterator {
-      case arg: TreeNode[_] if containsChild(arg) =>
-        val newChild = f(arg.asInstanceOf[BaseType])
-        if (forceCopy || !(newChild fastEquals arg)) {
-          changed = true
-          newChild
-        } else {
-          arg
-        }
-      case Some(arg: TreeNode[_]) if containsChild(arg) =>
-        val newChild = f(arg.asInstanceOf[BaseType])
-        if (forceCopy || !(newChild fastEquals arg)) {
-          changed = true
-          Some(newChild)
-        } else {
-          Some(arg)
-        }
-      // `map.mapValues().view.force` return `Map` in Scala 2.12 but return `IndexedSeq` in Scala
-      // 2.13, call `toMap` method manually to compatible with Scala 2.12 and Scala 2.13
-      case m: Map[_, _] => m.mapValues {
-        case arg: TreeNode[_] if containsChild(arg) =>
-          val newChild = f(arg.asInstanceOf[BaseType])
-          if (forceCopy || !(newChild fastEquals arg)) {
-            changed = true
-            newChild
-          } else {
-            arg
-          }
-        case other => other
-      }.view.force.toMap // `mapValues` is lazy and we need to force it to materialize
-      case d: DataType => d // Avoid unpacking Structs
-      case args: Stream[_] => args.map(mapChild).force // Force materialization on stream
-      case args: Iterable[_] => args.map(mapChild)
-      case nonChild: AnyRef => nonChild
-      case null => null
-    }
-    if (forceCopy || changed) makeCopy(newArgs, forceCopy) else this
   }
 
   /**
@@ -857,7 +829,44 @@ abstract class TreeNode[BaseType <: TreeNode[BaseType]] extends Product with Tre
   }
 
   override def clone(): BaseType = {
-    mapChildren(_.clone(), forceCopy = true)
+    def mapChild(child: Any): Any = child match {
+      case arg: TreeNode[_] if containsChild(arg) =>
+        arg.asInstanceOf[BaseType].clone()
+      case (arg1: TreeNode[_], arg2: TreeNode[_]) =>
+        val newChild1 = if (containsChild(arg1)) {
+          arg1.asInstanceOf[BaseType].clone()
+        } else {
+          arg1.asInstanceOf[BaseType]
+        }
+
+        val newChild2 = if (containsChild(arg2)) {
+          arg2.asInstanceOf[BaseType].clone()
+        } else {
+          arg2.asInstanceOf[BaseType]
+        }
+        (newChild1, newChild2)
+      case other => other
+    }
+
+    val newArgs = mapProductIterator {
+      case arg: TreeNode[_] if containsChild(arg) =>
+        arg.asInstanceOf[BaseType].clone()
+      case Some(arg: TreeNode[_]) if containsChild(arg) =>
+        Some(arg.asInstanceOf[BaseType].clone())
+      // `map.mapValues().view.force` return `Map` in Scala 2.12 but return `IndexedSeq` in Scala
+      // 2.13, call `toMap` method manually to compatible with Scala 2.12 and Scala 2.13
+      case m: Map[_, _] => m.mapValues {
+        case arg: TreeNode[_] if containsChild(arg) =>
+          arg.asInstanceOf[BaseType].clone()
+        case other => other
+      }.view.force.toMap // `mapValues` is lazy and we need to force it to materialize
+      case d: DataType => d // Avoid unpacking Structs
+      case args: Stream[_] => args.map(mapChild).force // Force materialization on stream
+      case args: Iterable[_] => args.map(mapChild)
+      case nonChild: AnyRef => nonChild
+      case null => null
+    }
+    makeCopy(newArgs, allowEmptyArgs = true)
   }
 
   private def simpleClassName: String = Utils.getSimpleName(this.getClass)
@@ -911,6 +920,8 @@ abstract class TreeNode[BaseType <: TreeNode[BaseType]] extends Product with Tre
     case null => Nil
     case None => Nil
     case Some(null) => Nil
+    case Some(table: CatalogTable) =>
+      stringArgsForCatalogTable(table)
     case Some(any) => any :: Nil
     case map: CaseInsensitiveStringMap =>
       redactMapString(map.asCaseSensitiveMap().asScala, maxFields)
@@ -920,12 +931,21 @@ abstract class TreeNode[BaseType <: TreeNode[BaseType]] extends Product with Tre
       t.copy(properties = Utils.redact(t.properties).toMap,
         options = Utils.redact(t.options).toMap) :: Nil
     case table: CatalogTable =>
-      table.storage.serde match {
-        case Some(serde) => table.identifier :: serde :: Nil
-        case _ => table.identifier :: Nil
-      }
+      stringArgsForCatalogTable(table)
+
     case other => other :: Nil
   }.mkString(", ")
+
+  private def stringArgsForCatalogTable(table: CatalogTable): Seq[Any] = {
+    table.storage.serde match {
+      case Some(serde)
+        // SPARK-39564: don't print out serde to avoid introducing complicated and error-prone
+        // regex magic.
+        if !SQLConf.get.getConfString("spark.test.noSerdeInExplain", "false").toBoolean =>
+        table.identifier :: serde :: Nil
+      case _ => table.identifier :: Nil
+    }
+  }
 
   /**
    * ONE line description of this node.
@@ -1197,7 +1217,7 @@ abstract class TreeNode[BaseType <: TreeNode[BaseType]] extends Product with Tre
   private def shouldConvertToJson(product: Product): Boolean = product match {
     case exprId: ExprId => true
     case field: StructField => true
-    case id: IdentifierWithDatabase => true
+    case id: CatalystIdentifier => true
     case alias: AliasIdentifier => true
     case join: JoinType => true
     case spec: BucketSpec => true
@@ -1217,7 +1237,8 @@ abstract class TreeNode[BaseType <: TreeNode[BaseType]] extends Product with Tre
 trait LeafLike[T <: TreeNode[T]] { self: TreeNode[T] =>
   override final def children: Seq[T] = Nil
   override final def mapChildren(f: T => T): T = this.asInstanceOf[T]
-  override final def withNewChildrenInternal(newChildren: IndexedSeq[T]): T = this.asInstanceOf[T]
+  // Stateful expressions should override this method to return a new instance.
+  override def withNewChildrenInternal(newChildren: IndexedSeq[T]): T = this.asInstanceOf[T]
 }
 
 trait UnaryLike[T <: TreeNode[T]] { self: TreeNode[T] =>
@@ -1342,4 +1363,22 @@ trait QuaternaryLike[T <: TreeNode[T]] { self: TreeNode[T] =>
   }
 
   protected def withNewChildrenInternal(newFirst: T, newSecond: T, newThird: T, newFourth: T): T
+}
+
+object MultiTransform {
+
+  /**
+   * Returns the stream of `Seq` elements by generating the cartesian product of sequences.
+   *
+   * @param elementSeqs a list of sequences to build the cartesian product from
+   * @return            the stream of generated `Seq` elements
+   */
+  def generateCartesianProduct[T](elementSeqs: Seq[() => Seq[T]]): Stream[Seq[T]] = {
+    elementSeqs.foldRight(Stream(Seq.empty[T]))((elements, elementTails) =>
+      for {
+        elementTail <- elementTails
+        element <- elements()
+      } yield element +: elementTail
+    )
+  }
 }

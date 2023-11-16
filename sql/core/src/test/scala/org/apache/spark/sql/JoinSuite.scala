@@ -183,7 +183,7 @@ class JoinSuite extends QueryTest with SharedSparkSession with AdaptiveSparkPlan
   test("inner join where, one match per row") {
     withSQLConf(SQLConf.CASE_SENSITIVE.key -> "true") {
       checkAnswer(
-        upperCaseData.join(lowerCaseData).where(Symbol("n") === 'N),
+        upperCaseData.join(lowerCaseData).where($"n" === $"N"),
         Seq(
           Row(1, "A", 1, "a"),
           Row(2, "B", 2, "b"),
@@ -404,8 +404,8 @@ class JoinSuite extends QueryTest with SharedSparkSession with AdaptiveSparkPlan
 
   test("full outer join") {
     withTempView("`left`", "`right`") {
-      upperCaseData.where(Symbol("N") <= 4).createOrReplaceTempView("`left`")
-      upperCaseData.where(Symbol("N") >= 3).createOrReplaceTempView("`right`")
+      upperCaseData.where($"N" <= 4).createOrReplaceTempView("`left`")
+      upperCaseData.where($"N" >= 3).createOrReplaceTempView("`right`")
 
       val left = UnresolvedRelation(TableIdentifier("left"))
       val right = UnresolvedRelation(TableIdentifier("right"))
@@ -623,7 +623,7 @@ class JoinSuite extends QueryTest with SharedSparkSession with AdaptiveSparkPlan
       testData.createOrReplaceTempView("B")
       testData2.createOrReplaceTempView("C")
       testData3.createOrReplaceTempView("D")
-      upperCaseData.where(Symbol("N") >= 3).createOrReplaceTempView("`right`")
+      upperCaseData.where($"N" >= 3).createOrReplaceTempView("`right`")
       val cartesianQueries = Seq(
         /** The following should error out since there is no explicit cross join */
         "SELECT * FROM testData inner join testData2",
@@ -1097,7 +1097,7 @@ class JoinSuite extends QueryTest with SharedSparkSession with AdaptiveSparkPlan
   }
 
   test("SPARK-29850: sort-merge-join an empty table should not memory leak") {
-    val df1 = spark.range(10).select($"id", $"id" % 3 as 'p)
+    val df1 = spark.range(10).select($"id", $"id" % 3 as Symbol("p"))
       .repartition($"id").groupBy($"id").agg(Map("p" -> "max"))
     val df2 = spark.range(0)
     withSQLConf(SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key -> "-1") {
@@ -1438,6 +1438,110 @@ class JoinSuite extends QueryTest with SharedSparkSession with AdaptiveSparkPlan
             }.size == 1)
           }
       }
+    }
+  }
+
+  test("SPARK-40487: Make defaultJoin in BroadcastNestedLoopJoinExec running in parallel") {
+    withTable("t1", "t2") {
+      spark.range(5, 15).toDF("k").write.saveAsTable("t1")
+      spark.range(4, 8).toDF("k").write.saveAsTable("t2")
+
+      val queryBuildLeft = "SELECT /*+ BROADCAST(t1) */ *  FROM t1 LEFT JOIN t2 ON t1.k < t2.k"
+      val result1 = sql(queryBuildLeft)
+
+      val queryBuildRight = "SELECT /*+ BROADCAST(t2) */ *  FROM t1 LEFT JOIN t2 ON t1.k < t2.k"
+      val result2 = sql(queryBuildRight)
+
+      checkAnswer(result1, result2)
+    }
+  }
+
+  def dupStreamSideColTest(hint: String, check: SparkPlan => Unit): Unit = {
+    val query =
+      s"""select /*+ ${hint}(r) */ *
+         |from testData2 l
+         |full outer join testData3 r
+         |on l.a = r.a
+         |and l.b < (r.b + 1)
+         |and l.b < (r.a + 1)""".stripMargin
+    val df = sql(query)
+    val plan = df.queryExecution.executedPlan
+    check(plan)
+    val expected = Row(1, 1, null, null) ::
+      Row(1, 2, null, null) ::
+      Row(null, null, 1, null) ::
+      Row(2, 1, 2, 2) ::
+      Row(2, 2, 2, 2) ::
+      Row(3, 1, null, null) ::
+      Row(3, 2, null, null) :: Nil
+    checkAnswer(df, expected)
+  }
+
+  test("SPARK-43113: Full outer join with duplicate stream-side references in condition (SMJ)") {
+    def check(plan: SparkPlan): Unit = {
+      assert(collect(plan) { case _: SortMergeJoinExec => true }.size === 1)
+    }
+    dupStreamSideColTest("MERGE", check)
+  }
+
+  test("SPARK-43113: Full outer join with duplicate stream-side references in condition (SHJ)") {
+    def check(plan: SparkPlan): Unit = {
+      assert(collect(plan) { case _: ShuffledHashJoinExec => true }.size === 1)
+    }
+    dupStreamSideColTest("SHUFFLE_HASH", check)
+  }
+
+  test("SPARK-43718: USING with references to key columns: Full Outer") {
+    withTempView("t1", "t2") {
+      sql("create or replace temp view t1 as values (1), (2), (3) as (c1)")
+      sql("create or replace temp view t2 as values (2), (3), (4) as (c1)")
+
+      val query =
+        """select explode(array(t1.c1, t2.c1)) as x1
+          |from t1
+          |full outer join t2
+          |using (c1)
+          |""".stripMargin
+
+      val expected = Seq(Row(1), Row(2), Row(2), Row(3), Row(3), Row(4), Row(null), Row(null))
+
+      checkAnswer(sql(query), expected)
+    }
+  }
+
+  test("SPARK-43718: USING with references to key columns: Left Outer") {
+    withTempView("t1", "t2") {
+      sql("create or replace temp view t1 as values (1), (2), (3) as (c1)")
+      sql("create or replace temp view t2 as values (2), (3), (4) as (c1)")
+
+      val query =
+        """select explode(array(t1.c1, t2.c1)) as x1
+          |from t1
+          |left outer join t2
+          |using (c1)
+          |""".stripMargin
+
+      val expected = Seq(Row(1), Row(2), Row(2), Row(3), Row(3), Row(null))
+
+      checkAnswer(sql(query), expected)
+    }
+  }
+
+  test("SPARK-43718: USING with references to key columns: Right Outer") {
+    withTempView("t1", "t2") {
+      sql("create or replace temp view t1 as values (1), (2), (3) as (c1)")
+      sql("create or replace temp view t2 as values (2), (3), (4) as (c1)")
+
+      val query =
+        """select explode(array(t1.c1, t2.c1)) as x1
+          |from t1
+          |right outer join t2
+          |using (c1)
+          |""".stripMargin
+
+      val expected = Seq(Row(2), Row(2), Row(3), Row(3), Row(4), Row(null))
+
+      checkAnswer(sql(query), expected)
     }
   }
 }

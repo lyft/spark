@@ -40,7 +40,7 @@ import org.apache.spark.sql.streaming.SinkProgress.DEFAULT_NUM_OUTPUT_ROWS
  * Information about updates made to stateful operators in a [[StreamingQuery]] during a trigger.
  */
 @Evolving
-class StateOperatorProgress private[sql](
+class StateOperatorProgress private[spark](
     val operatorName: String,
     val numRowsTotal: Long,
     val numRowsUpdated: Long,
@@ -125,7 +125,7 @@ class StateOperatorProgress private[sql](
  * @since 2.1.0
  */
 @Evolving
-class StreamingQueryProgress private[sql](
+class StreamingQueryProgress private[spark](
   val id: UUID,
   val runId: UUID,
   val name: String,
@@ -190,7 +190,7 @@ class StreamingQueryProgress private[sql](
  * @since 2.1.0
  */
 @Evolving
-class SourceProgress protected[sql](
+class SourceProgress protected[spark](
   val description: String,
   val startOffset: String,
   val endOffset: String,
@@ -236,9 +236,10 @@ class SourceProgress protected[sql](
  * @since 2.1.0
  */
 @Evolving
-class SinkProgress protected[sql](
+class SinkProgress protected[spark](
     val description: String,
-    val numOutputRows: Long) extends Serializable {
+    val numOutputRows: Long,
+    val metrics: ju.Map[String, String] = Map[String, String]().asJava) extends Serializable {
 
   /** SinkProgress without custom metrics. */
   protected[sql] def this(description: String) = {
@@ -255,15 +256,17 @@ class SinkProgress protected[sql](
 
   private[sql] def jsonValue: JValue = {
     ("description" -> JString(description)) ~
-      ("numOutputRows" -> JInt(numOutputRows))
+      ("numOutputRows" -> JInt(numOutputRows)) ~
+      ("metrics" -> safeMapToJValue[String](metrics, s => JString(s)))
   }
 }
 
 private[sql] object SinkProgress {
   val DEFAULT_NUM_OUTPUT_ROWS: Long = -1L
 
-  def apply(description: String, numOutputRows: Option[Long]): SinkProgress =
-    new SinkProgress(description, numOutputRows.getOrElse(DEFAULT_NUM_OUTPUT_ROWS))
+  def apply(description: String, numOutputRows: Option[Long],
+            metrics: ju.Map[String, String] = Map[String, String]().asJava): SinkProgress =
+    new SinkProgress(description, numOutputRows.getOrElse(DEFAULT_NUM_OUTPUT_ROWS), metrics)
 }
 
 private object SafeJsonSerializer {

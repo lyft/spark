@@ -19,13 +19,13 @@ package org.apache.spark.sql.execution.datasources.v2
 
 import org.apache.spark.sql.catalyst.expressions.{Expression, PredicateHelper, SubqueryExpression}
 import org.apache.spark.sql.catalyst.expressions.Literal.TrueLiteral
-import org.apache.spark.sql.catalyst.plans.logical.{DeleteFromTable, DeleteFromTableWithFilters, LogicalPlan, ReplaceData, RowLevelWrite}
+import org.apache.spark.sql.catalyst.plans.logical.{DeleteFromTable, DeleteFromTableWithFilters, LogicalPlan, ReplaceData, RowLevelWrite, WriteDelta}
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.connector.catalog.{SupportsDelete, TruncatableTable}
+import org.apache.spark.sql.connector.catalog.{SupportsDeleteV2, TruncatableTable}
+import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.connector.write.RowLevelOperation
 import org.apache.spark.sql.connector.write.RowLevelOperation.Command.DELETE
 import org.apache.spark.sql.execution.datasources.DataSourceStrategy
-import org.apache.spark.sql.sources
 
 /**
  * A rule that replaces a rewritten DELETE operation with a delete using filters if the data source
@@ -39,10 +39,10 @@ object OptimizeMetadataOnlyDeleteFromTable extends Rule[LogicalPlan] with Predic
   override def apply(plan: LogicalPlan): LogicalPlan = plan transform {
     case RewrittenRowLevelCommand(rowLevelPlan, DELETE, cond, relation: DataSourceV2Relation) =>
       relation.table match {
-        case table: SupportsDelete if !SubqueryExpression.hasSubquery(cond) =>
+        case table: SupportsDeleteV2 if !SubqueryExpression.hasSubquery(cond) =>
           val predicates = splitConjunctivePredicates(cond)
           val normalizedPredicates = DataSourceStrategy.normalizeExprs(predicates, relation.output)
-          val filters = toDataSourceFilters(normalizedPredicates)
+          val filters = toDataSourceV2Filters(normalizedPredicates)
           val allPredicatesTranslated = normalizedPredicates.size == filters.length
           if (allPredicatesTranslated && table.canDeleteWhere(filters)) {
             logDebug(s"Switching to delete with filters: ${filters.mkString("[", ", ", "]")}")
@@ -59,9 +59,9 @@ object OptimizeMetadataOnlyDeleteFromTable extends Rule[LogicalPlan] with Predic
       }
   }
 
-  private def toDataSourceFilters(predicates: Seq[Expression]): Array[sources.Filter] = {
+  private def toDataSourceV2Filters(predicates: Seq[Expression]): Array[Predicate] = {
     predicates.flatMap { p =>
-      val filter = DataSourceStrategy.translateFilter(p, supportNestedPredicatePushdown = true)
+      val filter = DataSourceV2Strategy.translateFilterV2(p)
       if (filter.isEmpty) {
         logDebug(s"Cannot translate expression to data source filter: $p")
       }
@@ -76,6 +76,10 @@ object OptimizeMetadataOnlyDeleteFromTable extends Rule[LogicalPlan] with Predic
       case rd @ ReplaceData(_, cond, _, originalTable, _) =>
         val command = rd.operation.command
         Some(rd, command, cond, originalTable)
+
+      case wd @ WriteDelta(_, cond, _, originalTable, _, _) =>
+        val command = wd.operation.command
+        Some(wd, command, cond, originalTable)
 
       case _ =>
         None

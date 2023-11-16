@@ -140,6 +140,7 @@ abstract class PropagateEmptyRelationBase extends Rule[LogicalPlan] with CastSup
       case _: Sort => empty(p)
       case _: GlobalLimit if !p.isStreaming => empty(p)
       case _: LocalLimit if !p.isStreaming => empty(p)
+      case _: Offset => empty(p)
       case _: RepartitionOperation =>
         if (p.getTagValue(ROOT_REPARTITION).isEmpty) {
           empty(p)
@@ -166,6 +167,7 @@ abstract class PropagateEmptyRelationBase extends Rule[LogicalPlan] with CastSup
       // Generators like Hive-style UDTF may return their records within `close`.
       case Generate(_: Explode, _, _, _, _, _) => empty(p)
       case Expand(_, _, _) => empty(p)
+      case _: Window => empty(p)
       case _ => p
     }
   }

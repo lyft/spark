@@ -32,7 +32,7 @@ abstract class CTEInlineSuiteBase
   import testImplicits._
 
   test("SPARK-36447: non-deterministic CTE dedup") {
-    withView("t") {
+    withTempView("t") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       val df = sql(
         s"""with
@@ -42,14 +42,19 @@ abstract class CTEInlineSuiteBase
            |select * from v except select * from v
          """.stripMargin)
       checkAnswer(df, Nil)
+
+      val r = df.queryExecution.optimizedPlan.find {
+        case RepartitionByExpression(p, _, None) => p.isEmpty
+        case _ => false
+      }
       assert(
-        df.queryExecution.optimizedPlan.exists(_.isInstanceOf[RepartitionOperation]),
+        r.isDefined,
         "Non-deterministic With-CTE with multiple references should be not inlined.")
     }
   }
 
   test("SPARK-36447: non-deterministic CTE in subquery") {
-    withView("t") {
+    withTempView("t") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       val df = sql(
         s"""with
@@ -66,7 +71,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("SPARK-36447: non-deterministic CTE with one reference should be inlined") {
-    withView("t") {
+    withTempView("t") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       val df = sql(
         s"""with
@@ -86,7 +91,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("SPARK-36447: nested non-deterministic CTEs referenced more than once are not inlined") {
-    withView("t") {
+    withTempView("t") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       val df = sql(
         s"""with
@@ -115,7 +120,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("SPARK-36447: nested CTEs only the deterministic is inlined") {
-    withView("t") {
+    withTempView("t") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       val df = sql(
         s"""with
@@ -144,7 +149,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("SPARK-36447: nested non-deterministic CTEs referenced only once are inlined") {
-    withView("t") {
+    withTempView("t") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       val df = sql(
         s"""with
@@ -173,7 +178,7 @@ abstract class CTEInlineSuiteBase
   test("SPARK-36447: With in subquery of main query") {
     withSQLConf(
       SQLConf.ADAPTIVE_OPTIMIZER_EXCLUDED_RULES.key -> AQEPropagateEmptyRelation.ruleName) {
-      withView("t") {
+      withTempView("t") {
         Seq((2, 1), (2, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
         val df = sql(
           s"""with v as (
@@ -200,7 +205,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("SPARK-36447: With in subquery of CTE def") {
-    withView("t") {
+    withTempView("t") {
       Seq((2, 1), (2, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       val df = sql(
         s"""with v as (
@@ -227,7 +232,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("SPARK-36447: nested deterministic CTEs are inlined") {
-    withView("t") {
+    withTempView("t") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       val df = sql(
         s"""with
@@ -256,7 +261,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("SPARK-36447: invalid nested CTEs") {
-    withView("t") {
+    withTempView("t") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       val ex = intercept[AnalysisException](sql(
         s"""with
@@ -270,12 +275,13 @@ abstract class CTEInlineSuiteBase
            |  select * from v2 where c1 > 0 union select * from v2 where c2 > 0
            |)
          """.stripMargin))
-      assert(ex.message.contains("Table or view not found: v1"))
+      checkErrorTableNotFound(ex, "`v1`",
+        ExpectedContext("v1", 29, 30))
     }
   }
 
   test("CTE Predicate push-down and column pruning") {
-    withView("t") {
+    withTempView("t") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       val df = sql(
         s"""with
@@ -325,7 +331,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("CTE Predicate push-down and column pruning - combined predicate") {
-    withView("t") {
+    withTempView("t") {
       Seq((0, 1, 2), (1, 2, 3)).toDF("c1", "c2", "c3").createOrReplaceTempView("t")
       val df = sql(
         s"""with
@@ -378,7 +384,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("Views with CTEs - 1 temp view") {
-    withView("t", "t2") {
+    withTempView("t", "t2") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       sql(
         s"""with
@@ -399,7 +405,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("Views with CTEs - 2 temp views") {
-    withView("t", "t2", "t3") {
+    withTempView("t", "t2", "t3") {
       Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
       sql(
         s"""with
@@ -422,7 +428,7 @@ abstract class CTEInlineSuiteBase
 
   test("Views with CTEs - temp view + sql view") {
     withTable("t") {
-      withView ("t2", "t3") {
+      withTempView ("t2", "t3") {
         Seq((0, 1), (1, 2)).toDF("c1", "c2").write.saveAsTable("t")
         sql(
           s"""with
@@ -453,7 +459,7 @@ abstract class CTEInlineSuiteBase
   }
 
   test("CTE definitions out of original order when not inlined") {
-    withView("t1", "t2") {
+    withTempView("issue_current") {
       Seq((1, 2, 10, 100), (2, 3, 20, 200)).toDF("workspace_id", "issue_id", "shard_id", "field_id")
         .createOrReplaceTempView("issue_current")
       withSQLConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key ->
@@ -643,4 +649,23 @@ abstract class CTEInlineSuiteBase
 
 class CTEInlineSuiteAEOff extends CTEInlineSuiteBase with DisableAdaptiveExecutionSuite
 
-class CTEInlineSuiteAEOn extends CTEInlineSuiteBase with EnableAdaptiveExecutionSuite
+class CTEInlineSuiteAEOn extends CTEInlineSuiteBase with EnableAdaptiveExecutionSuite {
+  import testImplicits._
+
+  test("SPARK-40105: Improve repartition in ReplaceCTERefWithRepartition") {
+    withTempView("t") {
+      Seq((0, 1), (1, 2)).toDF("c1", "c2").createOrReplaceTempView("t")
+      val df = sql(
+        s"""with
+           |v as (
+           |  select /*+ rebalance(c1) */ c1, c2, rand() from t
+           |)
+           |select * from v except select * from v
+         """.stripMargin)
+      checkAnswer(df, Nil)
+
+      assert(!df.queryExecution.optimizedPlan.exists(_.isInstanceOf[RepartitionOperation]))
+      assert(df.queryExecution.optimizedPlan.exists(_.isInstanceOf[RebalancePartitions]))
+    }
+  }
+}

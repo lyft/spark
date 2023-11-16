@@ -29,7 +29,7 @@ import org.apache.spark.scheduler.{SparkListener, SparkListenerEvent, SparkListe
 import org.apache.spark.sql.{Dataset, QueryTest, Row, SparkSession, Strategy}
 import org.apache.spark.sql.catalyst.optimizer.{BuildLeft, BuildRight}
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, LogicalPlan}
-import org.apache.spark.sql.execution.{CollectLimitExec, CommandResultExec, LocalTableScanExec, PartialReducerPartitionSpec, QueryExecution, ReusedSubqueryExec, ShuffledRowRDD, SortExec, SparkPlan, UnaryExecNode, UnionExec}
+import org.apache.spark.sql.execution.{CollectLimitExec, LocalTableScanExec, PartialReducerPartitionSpec, QueryExecution, ReusedSubqueryExec, ShuffledRowRDD, SortExec, SparkPlan, SparkPlanInfo, UnionExec}
 import org.apache.spark.sql.execution.aggregate.BaseAggregateExec
 import org.apache.spark.sql.execution.command.DataWritingCommandExec
 import org.apache.spark.sql.execution.datasources.noop.NoopDataSource
@@ -37,7 +37,7 @@ import org.apache.spark.sql.execution.datasources.v2.V2TableWriteExec
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ENSURE_REQUIREMENTS, Exchange, REPARTITION_BY_COL, REPARTITION_BY_NUM, ReusedExchangeExec, ShuffleExchangeExec, ShuffleExchangeLike, ShuffleOrigin}
 import org.apache.spark.sql.execution.joins.{BaseJoinExec, BroadcastHashJoinExec, BroadcastNestedLoopJoinExec, ShuffledHashJoinExec, ShuffledJoin, SortMergeJoinExec}
 import org.apache.spark.sql.execution.metric.SQLShuffleReadMetricsReporter
-import org.apache.spark.sql.execution.ui.SparkListenerSQLAdaptiveExecutionUpdate
+import org.apache.spark.sql.execution.ui.{SparkListenerSQLAdaptiveExecutionUpdate, SparkListenerSQLExecutionStart}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.internal.SQLConf.PartitionOverwriteMode
@@ -288,12 +288,12 @@ class AdaptiveQueryExecSuite
       SQLConf.ADAPTIVE_EXECUTION_ENABLED.key -> "true",
       SQLConf.COALESCE_PARTITIONS_ENABLED.key -> "true",
       SQLConf.ADAPTIVE_OPTIMIZER_EXCLUDED_RULES.key -> AQEPropagateEmptyRelation.ruleName) {
-      val df1 = spark.range(10).withColumn("a", Symbol("id"))
-      val df2 = spark.range(10).withColumn("b", Symbol("id"))
+      val df1 = spark.range(10).withColumn("a", $"id")
+      val df2 = spark.range(10).withColumn("b", $"id")
       withSQLConf(SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key -> "-1") {
-        val testDf = df1.where(Symbol("a") > 10)
-          .join(df2.where(Symbol("b") > 10), Seq("id"), "left_outer")
-          .groupBy(Symbol("a")).count()
+        val testDf = df1.where($"a" > 10)
+          .join(df2.where($"b" > 10), Seq("id"), "left_outer")
+          .groupBy($"a").count()
         checkAnswer(testDf, Seq())
         val plan = testDf.queryExecution.executedPlan
         assert(find(plan)(_.isInstanceOf[SortMergeJoinExec]).isDefined)
@@ -305,9 +305,9 @@ class AdaptiveQueryExecSuite
       }
 
       withSQLConf(SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key -> "1") {
-        val testDf = df1.where(Symbol("a") > 10)
-          .join(df2.where(Symbol("b") > 10), Seq("id"), "left_outer")
-          .groupBy(Symbol("a")).count()
+        val testDf = df1.where($"a" > 10)
+          .join(df2.where($"b" > 10), Seq("id"), "left_outer")
+          .groupBy($"a").count()
         checkAnswer(testDf, Seq())
         val plan = testDf.queryExecution.executedPlan
         assert(find(plan)(_.isInstanceOf[BroadcastHashJoinExec]).isDefined)
@@ -802,17 +802,17 @@ class AdaptiveQueryExecSuite
           spark
             .range(0, 1000, 1, 10)
             .select(
-              when(Symbol("id") < 250, 249)
-                .when(Symbol("id") >= 750, 1000)
-                .otherwise(Symbol("id")).as("key1"),
-              Symbol("id") as "value1")
+              when($"id" < 250, 249)
+                .when($"id" >= 750, 1000)
+                .otherwise($"id").as("key1"),
+              $"id" as "value1")
             .createOrReplaceTempView("skewData1")
           spark
             .range(0, 1000, 1, 10)
             .select(
-              when(Symbol("id") < 250, 249)
-                .otherwise(Symbol("id")).as("key2"),
-              Symbol("id") as "value2")
+              when($"id" < 250, 249)
+                .otherwise($"id").as("key2"),
+              $"id" as "value2")
             .createOrReplaceTempView("skewData2")
 
           def checkSkewJoin(
@@ -1047,17 +1047,17 @@ class AdaptiveQueryExecSuite
           spark
             .range(0, 1000, 1, 10)
             .select(
-              when(Symbol("id") < 250, 249)
-                .when(Symbol("id") >= 750, 1000)
-                .otherwise(Symbol("id")).as("key1"),
-              Symbol("id") as "value1")
+              when($"id" < 250, 249)
+                .when($"id" >= 750, 1000)
+                .otherwise($"id").as("key1"),
+              $"id" as "value1")
             .createOrReplaceTempView("skewData1")
           spark
             .range(0, 1000, 1, 10)
             .select(
-              when(Symbol("id") < 250, 249)
-                .otherwise(Symbol("id")).as("key2"),
-              Symbol("id") as "value2")
+              when($"id" < 250, 249)
+                .otherwise($"id").as("key2"),
+              $"id" as "value2")
             .createOrReplaceTempView("skewData2")
           val (_, adaptivePlan) = runAdaptiveAndVerifyResult(
             "SELECT * FROM skewData1 join skewData2 ON key1 = key2")
@@ -1119,23 +1119,71 @@ class AdaptiveQueryExecSuite
     }
   }
 
-  test("SPARK-30953: InsertAdaptiveSparkPlan should apply AQE on child plan of write commands") {
+  test("SPARK-30953: InsertAdaptiveSparkPlan should apply AQE on child plan of v2 write commands") {
     withSQLConf(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key -> "true",
       SQLConf.ADAPTIVE_EXECUTION_FORCE_APPLY.key -> "true") {
+      var plan: SparkPlan = null
+      val listener = new QueryExecutionListener {
+        override def onSuccess(funcName: String, qe: QueryExecution, durationNs: Long): Unit = {
+          plan = qe.executedPlan
+        }
+        override def onFailure(
+          funcName: String, qe: QueryExecution, exception: Exception): Unit = {}
+      }
+      spark.listenerManager.register(listener)
       withTable("t1") {
-        val plan = sql("CREATE TABLE t1 USING parquet AS SELECT 1 col").queryExecution.executedPlan
-        assert(plan.isInstanceOf[CommandResultExec])
-        val commandResultExec = plan.asInstanceOf[CommandResultExec]
-        assert(commandResultExec.commandPhysicalPlan.isInstanceOf[DataWritingCommandExec])
-        assert(commandResultExec.commandPhysicalPlan.asInstanceOf[DataWritingCommandExec]
-          .child.isInstanceOf[AdaptiveSparkPlanExec])
+        val format = classOf[NoopDataSource].getName
+        Seq((0, 1)).toDF("x", "y").write.format(format).mode("overwrite").save()
+
+        sparkContext.listenerBus.waitUntilEmpty()
+        assert(plan.isInstanceOf[V2TableWriteExec])
+        assert(plan.asInstanceOf[V2TableWriteExec].child.isInstanceOf[AdaptiveSparkPlanExec])
+
+        spark.listenerManager.unregister(listener)
+      }
+    }
+  }
+
+  test("SPARK-37287: apply AQE on child plan of a v1 write command") {
+    Seq(true, false).foreach { enabled =>
+      withSQLConf(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key -> "true",
+        SQLConf.ADAPTIVE_EXECUTION_FORCE_APPLY.key -> "true",
+        SQLConf.PLANNED_WRITE_ENABLED.key -> enabled.toString) {
+        withTable("t1") {
+          var checkDone = false
+          val listener = new SparkListener {
+            override def onOtherEvent(event: SparkListenerEvent): Unit = {
+              event match {
+                case SparkListenerSQLAdaptiveExecutionUpdate(_, _, planInfo) =>
+                  if (enabled) {
+                    assert(planInfo.nodeName == "AdaptiveSparkPlan")
+                    assert(planInfo.children.size == 1)
+                    assert(planInfo.children.head.nodeName ==
+                      "Execute InsertIntoHadoopFsRelationCommand")
+                  } else {
+                    assert(planInfo.nodeName == "Execute InsertIntoHadoopFsRelationCommand")
+                  }
+                  checkDone = true
+                case _ => // ignore other events
+              }
+            }
+          }
+          spark.sparkContext.addSparkListener(listener)
+          try {
+            sql("CREATE TABLE t1 USING parquet AS SELECT 1 col").collect()
+            spark.sparkContext.listenerBus.waitUntilEmpty()
+            assert(checkDone)
+          } finally {
+            spark.sparkContext.removeSparkListener(listener)
+          }
+        }
       }
     }
   }
 
   test("AQE should set active session during execution") {
     withSQLConf(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key -> "true") {
-      val df = spark.range(10).select(sum(Symbol("id")))
+      val df = spark.range(10).select(sum($"id"))
       assert(df.queryExecution.executedPlan.isInstanceOf[AdaptiveSparkPlanExec])
       SparkSession.setActiveSession(null)
       checkAnswer(df, Seq(Row(45)))
@@ -1162,7 +1210,7 @@ class AdaptiveQueryExecSuite
       SQLConf.ADAPTIVE_EXECUTION_FORCE_APPLY.key -> "true") {
       try {
         spark.experimental.extraStrategies = TestStrategy :: Nil
-        val df = spark.range(10).groupBy(Symbol("id")).count()
+        val df = spark.range(10).groupBy($"id").count()
         df.collect()
       } finally {
         spark.experimental.extraStrategies = Nil
@@ -1174,13 +1222,12 @@ class AdaptiveQueryExecSuite
     withSQLConf(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key -> "true",
       SQLConf.ADAPTIVE_EXECUTION_FORCE_APPLY.key -> "true") {
       withTable("t1") {
-        var checkDone = false
+        var commands: Seq[SparkPlanInfo] = Seq.empty
         val listener = new SparkListener {
           override def onOtherEvent(event: SparkListenerEvent): Unit = {
             event match {
-              case SparkListenerSQLAdaptiveExecutionUpdate(_, _, planInfo) =>
-                assert(planInfo.nodeName == "Execute CreateDataSourceTableAsSelectCommand")
-                checkDone = true
+              case start: SparkListenerSQLExecutionStart =>
+                commands = commands ++ Seq(start.sparkPlanInfo)
               case _ => // ignore other events
             }
           }
@@ -1189,7 +1236,12 @@ class AdaptiveQueryExecSuite
         try {
           sql("CREATE TABLE t1 USING parquet AS SELECT 1 col").collect()
           spark.sparkContext.listenerBus.waitUntilEmpty()
-          assert(checkDone)
+          assert(commands.size == 3)
+          assert(commands.head.nodeName == "Execute CreateDataSourceTableAsSelectCommand")
+          assert(commands(1).nodeName == "AdaptiveSparkPlan")
+          assert(commands(1).children.size == 1)
+          assert(commands(1).children.head.nodeName == "Execute InsertIntoHadoopFsRelationCommand")
+          assert(commands(2).nodeName == "CommandResult")
         } finally {
           spark.sparkContext.removeSparkListener(listener)
         }
@@ -1584,9 +1636,8 @@ class AdaptiveQueryExecSuite
       var noLocalread: Boolean = false
       val listener = new QueryExecutionListener {
         override def onSuccess(funcName: String, qe: QueryExecution, durationNs: Long): Unit = {
-          qe.executedPlan match {
-            case plan@(_: DataWritingCommandExec | _: V2TableWriteExec) =>
-              assert(plan.asInstanceOf[UnaryExecNode].child.isInstanceOf[AdaptiveSparkPlanExec])
+          stripAQEPlan(qe.executedPlan) match {
+            case plan @ (_: DataWritingCommandExec | _: V2TableWriteExec) =>
               noLocalread = collect(plan) {
                 case exec: AQEShuffleReadExec if exec.isLocalRead => exec
               }.isEmpty
@@ -1618,7 +1669,7 @@ class AdaptiveQueryExecSuite
 
   test("SPARK-33494: Do not use local shuffle read for repartition") {
     withSQLConf(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key -> "true") {
-      val df = spark.table("testData").repartition(Symbol("key"))
+      val df = spark.table("testData").repartition($"key")
       df.collect()
       // local shuffle read breaks partitioning and shouldn't be used for repartition operation
       // which is specified by users.
@@ -1702,23 +1753,23 @@ class AdaptiveQueryExecSuite
 
       withSQLConf(SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key -> "80") {
         // Repartition with no partition num specified.
-        checkBHJ(df.repartition(Symbol("b")),
+        checkBHJ(df.repartition($"b"),
           // The top shuffle from repartition is optimized out.
           optimizeOutRepartition = true, probeSideLocalRead = false, probeSideCoalescedRead = true)
 
         // Repartition with default partition num (5 in test env) specified.
-        checkBHJ(df.repartition(5, Symbol("b")),
+        checkBHJ(df.repartition(5, $"b"),
           // The top shuffle from repartition is optimized out
           // The final plan must have 5 partitions, no optimization can be made to the probe side.
           optimizeOutRepartition = true, probeSideLocalRead = false, probeSideCoalescedRead = false)
 
         // Repartition with non-default partition num specified.
-        checkBHJ(df.repartition(4, Symbol("b")),
+        checkBHJ(df.repartition(4, $"b"),
           // The top shuffle from repartition is not optimized out
           optimizeOutRepartition = false, probeSideLocalRead = true, probeSideCoalescedRead = true)
 
         // Repartition by col and project away the partition cols
-        checkBHJ(df.repartition(Symbol("b")).select(Symbol("key")),
+        checkBHJ(df.repartition($"b").select($"key"),
           // The top shuffle from repartition is not optimized out
           optimizeOutRepartition = false, probeSideLocalRead = true, probeSideCoalescedRead = true)
       }
@@ -1730,23 +1781,23 @@ class AdaptiveQueryExecSuite
         SQLConf.SKEW_JOIN_SKEWED_PARTITION_FACTOR.key -> "0",
         SQLConf.ADVISORY_PARTITION_SIZE_IN_BYTES.key -> "10") {
         // Repartition with no partition num specified.
-        checkSMJ(df.repartition(Symbol("b")),
+        checkSMJ(df.repartition($"b"),
           // The top shuffle from repartition is optimized out.
           optimizeOutRepartition = true, optimizeSkewJoin = false, coalescedRead = true)
 
         // Repartition with default partition num (5 in test env) specified.
-        checkSMJ(df.repartition(5, Symbol("b")),
+        checkSMJ(df.repartition(5, $"b"),
           // The top shuffle from repartition is optimized out.
           // The final plan must have 5 partitions, can't do coalesced read.
           optimizeOutRepartition = true, optimizeSkewJoin = false, coalescedRead = false)
 
         // Repartition with non-default partition num specified.
-        checkSMJ(df.repartition(4, Symbol("b")),
+        checkSMJ(df.repartition(4, $"b"),
           // The top shuffle from repartition is not optimized out.
           optimizeOutRepartition = false, optimizeSkewJoin = true, coalescedRead = false)
 
         // Repartition by col and project away the partition cols
-        checkSMJ(df.repartition(Symbol("b")).select(Symbol("key")),
+        checkSMJ(df.repartition($"b").select($"key"),
           // The top shuffle from repartition is not optimized out.
           optimizeOutRepartition = false, optimizeSkewJoin = true, coalescedRead = false)
       }
@@ -2648,6 +2699,14 @@ class AdaptiveQueryExecSuite
       val df = df1.join(df2, col("c1") === col("c2")).repartition(3, col("c1"))
       assert(df.rdd.getNumPartitions == 3)
     }
+  }
+
+test("SPARK-44040: Fix compute stats when AggregateExec nodes above QueryStageExec") {
+    val emptyDf = spark.range(1).where("false")
+    val aggDf1 = emptyDf.agg(sum("id").as("id")).withColumn("name", lit("df1"))
+    val aggDf2 = emptyDf.agg(sum("id").as("id")).withColumn("name", lit("df2"))
+    val unionDF = aggDf1.union(aggDf2)
+    checkAnswer(unionDF.select("id").distinct, Seq(Row(null)))
   }
 }
 

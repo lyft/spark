@@ -18,6 +18,7 @@
 """
 Base and utility classes for pandas-on-Spark objects.
 """
+import warnings
 from abc import ABCMeta, abstractmethod
 from functools import wraps, partial
 from itertools import chain
@@ -38,7 +39,6 @@ from pyspark.pandas.internal import (
     NATURAL_ORDER_COLUMN_NAME,
     SPARK_DEFAULT_INDEX_NAME,
 )
-from pyspark.pandas.spark import functions as SF
 from pyspark.pandas.spark.accessors import SparkIndexOpsMethods
 from pyspark.pandas.typedef import extension_dtypes
 from pyspark.pandas.utils import (
@@ -212,7 +212,7 @@ def column_op(f: Callable[..., Column]) -> Callable[..., SeriesOrIndex]:
         from pyspark.pandas.indexes.base import Index
         from pyspark.pandas.series import Series
 
-        # It is possible for the function `f` takes other arguments than Spark Column.
+        # It is possible for the function `f` to take other arguments than Spark Column.
         # To cover this case, explicitly check if the argument is pandas-on-Spark Series and
         # extract Spark Column. For other arguments, they are used as are.
         cols = [arg for arg in args if isinstance(arg, (Series, Index))]
@@ -272,7 +272,7 @@ def numpy_column_op(f: Callable[..., Column]) -> Callable[..., SeriesOrIndex]:
 class IndexOpsMixin(object, metaclass=ABCMeta):
     """common ops mixin to support a unified interface / docs for Series / Index
 
-    Assuming there are following attributes or properties and function.
+    Assuming there are following attributes or properties and functions.
     """
 
     @property
@@ -327,8 +327,9 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
     def __truediv__(self, other: Any) -> SeriesOrIndex:
         """
         __truediv__ has different behaviour between pandas and PySpark for several cases.
-        1. When divide np.inf by zero, PySpark returns null whereas pandas returns np.inf
-        2. When divide positive number by zero, PySpark returns null whereas pandas returns np.inf
+        1. When dividing np.inf by zero, PySpark returns null whereas pandas returns np.inf
+        2. When dividing a positive number by zero, PySpark returns null
+        whereas pandas returns np.inf
         3. When divide -np.inf by zero, PySpark returns null whereas pandas returns -np.inf
         4. When divide negative number by zero, PySpark returns null whereas pandas returns -np.inf
 
@@ -361,8 +362,9 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
     def __floordiv__(self, other: Any) -> SeriesOrIndex:
         """
         __floordiv__ has different behaviour between pandas and PySpark for several cases.
-        1. When divide np.inf by zero, PySpark returns null whereas pandas returns np.inf
-        2. When divide positive number by zero, PySpark returns null whereas pandas returns np.inf
+        1. When dividing np.inf by zero, PySpark returns null whereas pandas returns np.inf
+        2. When dividing a positive number by zero, PySpark returns null
+        whereas pandas returns np.inf
         3. When divide -np.inf by zero, PySpark returns null whereas pandas returns -np.inf
         4. When divide negative number by zero, PySpark returns null whereas pandas returns -np.inf
 
@@ -492,7 +494,7 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
     @property
     def empty(self) -> bool:
         """
-        Returns true if the current object is empty. Otherwise, returns false.
+        Returns true if the current object is empty. Otherwise, it returns false.
 
         >>> ps.range(10).id.empty
         False
@@ -537,11 +539,13 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
 
         .. note:: the current implementation of is_monotonic requires to shuffle
             and aggregate multiple times to check the order locally and globally,
-            which is potentially expensive. In case of multi-index, all data are
-            transferred to single node which can easily cause out-of-memory error currently.
+            which is potentially expensive. In case of multi-index, all data is
+            transferred to a single node which can easily cause out-of-memory errors.
 
         .. note:: Disable the Spark config `spark.sql.optimizer.nestedSchemaPruning.enabled`
             for multi-index if you're using pandas-on-Spark < 1.7.0 with PySpark 3.1.1.
+
+        .. deprecated:: 3.4.0
 
         Returns
         -------
@@ -604,9 +608,88 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         >>> midx.is_monotonic
         False
         """
+        warnings.warn(
+            "is_monotonic is deprecated and will be removed in a future version. "
+            "Use is_monotonic_increasing instead.",
+            FutureWarning,
+        )
         return self._is_monotonic("increasing")
 
-    is_monotonic_increasing = is_monotonic
+    @property
+    def is_monotonic_increasing(self) -> bool:
+        """
+        Return boolean if values in the object are monotonically increasing.
+
+        .. note:: the current implementation of is_monotonic_increasing requires to shuffle
+            and aggregate multiple times to check the order locally and globally,
+            which is potentially expensive. In case of multi-index, all data is
+            transferred to a single node which can easily cause out-of-memory errors.
+
+        .. note:: Disable the Spark config `spark.sql.optimizer.nestedSchemaPruning.enabled`
+            for multi-index if you're using pandas-on-Spark < 1.7.0 with PySpark 3.1.1.
+
+        Returns
+        -------
+        is_monotonic : bool
+
+        Examples
+        --------
+        >>> ser = ps.Series(['1/1/2018', '3/1/2018', '4/1/2018'])
+        >>> ser.is_monotonic_increasing
+        True
+
+        >>> df = ps.DataFrame({'dates': [None, '1/1/2018', '2/1/2018', '3/1/2018']})
+        >>> df.dates.is_monotonic_increasing
+        False
+
+        >>> df.index.is_monotonic_increasing
+        True
+
+        >>> ser = ps.Series([1])
+        >>> ser.is_monotonic_increasing
+        True
+
+        >>> ser = ps.Series([])
+        >>> ser.is_monotonic_increasing
+        True
+
+        >>> ser.rename("a").to_frame().set_index("a").index.is_monotonic_increasing
+        True
+
+        >>> ser = ps.Series([5, 4, 3, 2, 1], index=[1, 2, 3, 4, 5])
+        >>> ser.is_monotonic_increasing
+        False
+
+        >>> ser.index.is_monotonic_increasing
+        True
+
+        Support for MultiIndex
+
+        >>> midx = ps.MultiIndex.from_tuples(
+        ... [('x', 'a'), ('x', 'b'), ('y', 'c'), ('y', 'd'), ('z', 'e')])
+        >>> midx  # doctest: +SKIP
+        MultiIndex([('x', 'a'),
+                    ('x', 'b'),
+                    ('y', 'c'),
+                    ('y', 'd'),
+                    ('z', 'e')],
+                   )
+        >>> midx.is_monotonic_increasing
+        True
+
+        >>> midx = ps.MultiIndex.from_tuples(
+        ... [('z', 'a'), ('z', 'b'), ('y', 'c'), ('y', 'd'), ('x', 'e')])
+        >>> midx  # doctest: +SKIP
+        MultiIndex([('z', 'a'),
+                    ('z', 'b'),
+                    ('y', 'c'),
+                    ('y', 'd'),
+                    ('x', 'e')],
+                   )
+        >>> midx.is_monotonic_increasing
+        False
+        """
+        return self._is_monotonic("increasing")
 
     @property
     def is_monotonic_decreasing(self) -> bool:
@@ -615,8 +698,8 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
 
         .. note:: the current implementation of is_monotonic_decreasing requires to shuffle
             and aggregate multiple times to check the order locally and globally,
-            which is potentially expensive. In case of multi-index, all data are transferred
-            to single node which can easily cause out-of-memory error currently.
+            which is potentially expensive. In case of multi-index, all data is transferred
+            to a single node which can easily cause out-of-memory errors.
 
         .. note:: Disable the Spark config `spark.sql.optimizer.nestedSchemaPruning.enabled`
             for multi-index if you're using pandas-on-Spark < 1.7.0 with PySpark 3.1.1.
@@ -724,14 +807,14 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
             .agg(
                 F.min(F.col("__origin")).alias("__partition_min"),
                 F.max(F.col("__origin")).alias("__partition_max"),
-                F.min(F.coalesce(F.col("__comparison_within_partition"), SF.lit(True))).alias(
+                F.min(F.coalesce(F.col("__comparison_within_partition"), F.lit(True))).alias(
                     "__comparison_within_partition"
                 ),
             )
         )
 
         # Now we're windowing the aggregation results without partition specification.
-        # The number of rows here will be as the same of partitions, which is expected
+        # The number of rows here will be the same as partitions, which is expected
         # to be small.
         window = Window.orderBy(F.col("__partition_id")).rowsBetween(-1, -1)
         if order == "increasing":
@@ -749,8 +832,8 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         )
 
         ret = sdf.select(
-            F.min(F.coalesce(F.col("__comparison_between_partitions"), SF.lit(True)))
-            & F.min(F.coalesce(F.col("__comparison_within_partition"), SF.lit(True)))
+            F.min(F.coalesce(F.col("__comparison_between_partitions"), F.lit(True)))
+            & F.min(F.coalesce(F.col("__comparison_within_partition"), F.lit(True)))
         ).collect()[0][0]
         if ret is None:
             return True
@@ -867,8 +950,8 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         5    False
         Name: animal, dtype: bool
 
-        >>> s.rename("a").to_frame().set_index("a").index.isin(['lama'])
-        Index([True, False, True, False, True, False], dtype='object', name='a')
+        >>> s.rename("a").to_frame().set_index("a").index.isin(['lama'])  # doctest: +SKIP
+        Index([True, False, True, False, True, False], dtype='bool', name='a')
         """
         if not is_list_like(values):
             raise TypeError(
@@ -880,7 +963,7 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
             cast(np.ndarray, values).tolist() if isinstance(values, np.ndarray) else list(values)
         )
 
-        other = [SF.lit(v) for v in values]
+        other = [F.lit(v) for v in values]
         scol = self.spark.column.isin(other)
         field = self._internal.data_fields[0].copy(
             dtype=np.dtype("bool"), spark_type=BooleanType(), nullable=False
@@ -892,7 +975,7 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         Detect existing (non-missing) values.
 
         Return a boolean same-sized object indicating if the values are NA.
-        NA values, such as None or numpy.NaN, gets mapped to True values.
+        NA values, such as None or numpy.NaN, get mapped to True values.
         Everything else gets mapped to False values. Characters such as empty strings '' or
         numpy.inf are not considered NA values
         (unless you set pandas.options.mode.use_inf_as_na = True).
@@ -911,8 +994,8 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         2     True
         dtype: bool
 
-        >>> ser.rename("a").to_frame().set_index("a").index.isna()
-        Index([False, False, True], dtype='object', name='a')
+        >>> ser.rename("a").to_frame().set_index("a").index.isna()  # doctest: +SKIP
+        Index([False, False, True], dtype='bool', name='a')
         """
         from pyspark.pandas.indexes import MultiIndex
 
@@ -954,8 +1037,8 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         2    False
         dtype: bool
 
-        >>> ser.rename("a").to_frame().set_index("a").index.notna()
-        Index([True, True, False], dtype='object', name='a')
+        >>> ser.rename("a").to_frame().set_index("a").index.notna()  # doctest: +SKIP
+        Index([True, True, False], dtype='bool', name='a')
         """
         from pyspark.pandas.indexes import MultiIndex
 
@@ -982,9 +1065,11 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
               original column labels.
 
         skipna : boolean, default True
-            Exclude NA/null values. If an entire row/column is NA and skipna is True,
+            Exclude NA values, such as None or numpy.NaN.
+            If an entire row/column is NA values and `skipna` is True,
             then the result will be True, as for an empty row/column.
-            If skipna is False, then NA are treated as True, because these are not equal to zero.
+            If `skipna` is False, numpy.NaNs are treated as True because these are
+            not equal to zero, Nones are treated as False.
 
         Examples
         --------
@@ -1040,11 +1125,11 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         # We use min as its alternative as below.
         if isinstance(self.spark.data_type, NumericType) or skipna:
             # np.nan takes no effect to the result; None takes no effect if `skipna`
-            ret = sdf.select(F.min(F.coalesce(col.cast("boolean"), SF.lit(True)))).collect()[0][0]
+            ret = sdf.select(F.min(F.coalesce(col.cast("boolean"), F.lit(True)))).collect()[0][0]
         else:
             # Take None as False when not `skipna`
             ret = sdf.select(
-                F.min(F.when(col.isNull(), SF.lit(False)).otherwise(col.cast("boolean")))
+                F.min(F.when(col.isNull(), F.lit(False)).otherwise(col.cast("boolean")))
             ).collect()[0][0]
 
         if ret is None:
@@ -1057,7 +1142,7 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         """
         Return whether any element is True.
 
-        Returns False unless there at least one element within a series that is
+        Returns False unless there is at least one element within a series that is
         True or equivalent (e.g. non-zero or non-empty).
 
         Parameters
@@ -1109,7 +1194,7 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         # any and every was added as of Spark 3.0
         # ret = sdf.select(F.expr("any(CAST(`%s` AS BOOLEAN))" % sdf.columns[0])).collect()[0][0]
         # Here we use max as its alternative:
-        ret = sdf.select(F.max(F.coalesce(col.cast("boolean"), SF.lit(False)))).collect()[0][0]
+        ret = sdf.select(F.max(F.coalesce(col.cast("boolean"), F.lit(False)))).collect()[0][0]
         if ret is None:
             return False
         else:
@@ -1123,9 +1208,9 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         Shift Series/Index by desired number of periods.
 
         .. note:: the current implementation of shift uses Spark's Window without
-            specifying partition specification. This leads to move all data into
-            single partition in single machine and could cause serious
-            performance degradation. Avoid this method against very large dataset.
+            specifying partition specification. This leads to moveing all data into
+            a single partition in a single machine and could cause serious
+            performance degradation. Avoid this method with very large datasets.
 
         Parameters
         ----------
@@ -1176,6 +1261,9 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
     ) -> IndexOpsLike:
         if not isinstance(periods, int):
             raise TypeError("periods should be an int; however, got [%s]" % type(periods).__name__)
+
+        if periods == 0:
+            return self.copy()
 
         col = self.spark.column
         window = (
@@ -1363,7 +1451,7 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
 
         if normalize:
             drop_sum = sdf_dropna.count()
-            sdf = sdf.withColumn("count", F.col("count") / SF.lit(drop_sum))
+            sdf = sdf.withColumn("count", F.col("count") / F.lit(drop_sum))
 
         internal = InternalFrame(
             spark_frame=sdf,
@@ -1535,6 +1623,8 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
             Value to mark "not found". If None, will not drop the NaN
             from the uniques of the values.
 
+            .. deprecated:: 3.4.0
+
         Returns
         -------
         codes : Series or Index
@@ -1601,12 +1691,12 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
         if isinstance(self.dtype, CategoricalDtype):
             categories = self.dtype.categories
             if len(categories) == 0:
-                scol = SF.lit(None)
+                scol = F.lit(None)
             else:
                 kvs = list(
                     chain(
                         *[
-                            (SF.lit(code), SF.lit(category))
+                            (F.lit(code), F.lit(category))
                             for code, category in enumerate(categories)
                         ]
                     )
@@ -1654,14 +1744,14 @@ class IndexOpsMixin(object, metaclass=ABCMeta):
             code += 1
 
         kvs = list(
-            chain(*([(SF.lit(unique), SF.lit(code)) for unique, code in unique_to_code.items()]))
+            chain(*([(F.lit(unique), F.lit(code)) for unique, code in unique_to_code.items()]))
         )
 
         if len(kvs) == 0:  # uniques are all missing values
-            new_scol = SF.lit(na_sentinel_code)
+            new_scol = F.lit(na_sentinel_code)
         else:
             map_scol = F.create_map(*kvs)
-            null_scol = F.when(self.isnull().spark.column, SF.lit(na_sentinel_code))
+            null_scol = F.when(self.isnull().spark.column, F.lit(na_sentinel_code))
             new_scol = null_scol.otherwise(map_scol[self.spark.column])
 
         codes = self._with_new_scol(new_scol.alias(self._internal.data_spark_column_names[0]))

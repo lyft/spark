@@ -38,9 +38,9 @@ import org.apache.spark.storage.StorageLevel
  * the graph from nodes that belong to adjacent graphs.
  */
 private[spark] case class RDDOperationGraph(
-    edges: Seq[RDDOperationEdge],
-    outgoingEdges: Seq[RDDOperationEdge],
-    incomingEdges: Seq[RDDOperationEdge],
+    edges: collection.Seq[RDDOperationEdge],
+    outgoingEdges: collection.Seq[RDDOperationEdge],
+    incomingEdges: collection.Seq[RDDOperationEdge],
     rootCluster: RDDOperationCluster)
 
 /** A node in an RDDOperationGraph. This represents an RDD. */
@@ -258,6 +258,7 @@ private[spark] object RDDOperationGraph extends Logging {
       case DeterministicLevel.DETERMINATE => ""
       case DeterministicLevel.INDETERMINATE => " [Indeterminate]"
       case DeterministicLevel.UNORDERED => " [Unordered]"
+      case _ => ""
     }
     val escapedCallsite = Utility.escape(node.callsite)
     val label = s"${node.name} [${node.id}]$isCached$isBarrier$outputDeterministicLevel" +

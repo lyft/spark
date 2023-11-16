@@ -28,6 +28,8 @@ import scala.util.Try
 
 import org.apache.commons.lang3.{JavaVersion, SystemUtils}
 import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.Path
+import org.apache.hadoop.hive.common.FileUtils
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.conf.HiveConf.ConfVars
 import org.apache.hadoop.hive.ql.session.SessionState
@@ -50,6 +52,7 @@ import org.apache.spark.util.{ChildFirstURLClassLoader, Utils}
 
 
 private[spark] object HiveUtils extends Logging {
+  private val PATTERN_FOR_KEY_EQ_VAL = "(.+)=(.+)".r
 
   /** The version of hive used internally by Spark SQL. */
   val builtinHiveVersion: String = HiveVersionInfo.getVersion
@@ -72,7 +75,7 @@ private[spark] object HiveUtils extends Logging {
   val HIVE_METASTORE_VERSION = buildStaticConf("spark.sql.hive.metastore.version")
     .doc("Version of the Hive metastore. Available options are " +
         "<code>0.12.0</code> through <code>2.3.9</code> and " +
-        "<code>3.0.0</code> through <code>3.1.2</code>.")
+        "<code>3.0.0</code> through <code>3.1.3</code>.")
     .version("1.4.0")
     .stringConf
     .checkValue(isCompatibleHiveVersion, "Unsupported Hive Metastore version")
@@ -197,6 +200,15 @@ private[spark] object HiveUtils extends Logging {
     .version("1.5.0")
     .booleanConf
     .createWithDefault(true)
+
+  val USE_DELEGATE_FOR_SYMLINK_TEXT_INPUT_FORMAT =
+    buildConf("spark.sql.hive.useDelegateForSymlinkTextInputFormat")
+      .internal()
+      .doc("When true, SymlinkTextInputFormat is replaced with a similar delegate class during " +
+        "table scan in order to fix the issue of empty splits")
+      .version("3.4.0")
+      .booleanConf
+      .createWithDefault(true)
 
   /**
    * The version of the hive client that will be used to communicate with the metastore.  Note that
@@ -579,7 +591,17 @@ private[spark] object HiveUtils extends Logging {
       // partition columns are part of the schema
       val partCols = hiveTable.getPartCols.asScala.map(HiveClientImpl.fromHiveColumn)
       val dataCols = hiveTable.getCols.asScala.map(HiveClientImpl.fromHiveColumn)
-      table.copy(schema = StructType((dataCols ++ partCols).toSeq))
+      table.copy(schema = StructType((dataCols ++ partCols).toArray))
+    }
+  }
+
+  /**
+   * Extract the partition values from a partition name, e.g., if a partition name is
+   * "region=US/dt=2023-02-18", then we will return an array of values ("US", "2023-02-18").
+   */
+  def partitionNameToValues(name: String): Array[String] = {
+    name.split(Path.SEPARATOR).map {
+      case PATTERN_FOR_KEY_EQ_VAL(_, v) => FileUtils.unescapePathName(v)
     }
   }
 }

@@ -22,7 +22,7 @@ import java.util
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.{NoSuchPartitionException, PartitionsAlreadyExistException}
-import org.apache.spark.sql.connector.expressions.{LogicalExpressions, NamedReference}
+import org.apache.spark.sql.connector.expressions.{LogicalExpressions, NamedReference, Transform}
 import org.apache.spark.sql.types.{IntegerType, StringType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
@@ -41,7 +41,7 @@ class SupportsAtomicPartitionManagementSuite extends SparkFunSuite {
         .add("id", IntegerType)
         .add("data", StringType)
         .add("dt", StringType),
-      Array(LogicalExpressions.identity(ref("dt"))),
+      Array[Transform](LogicalExpressions.identity(ref("dt"))),
       util.Collections.emptyMap[String, String])
     newCatalog
   }
@@ -163,10 +163,13 @@ class SupportsAtomicPartitionManagementSuite extends SparkFunSuite {
     assert(partTable.rows === InternalRow(2, "zyx", "5") :: Nil)
 
     // Truncate non-existing partition
-    val errMsg = intercept[NoSuchPartitionException] {
+    val e = intercept[NoSuchPartitionException] {
       partTable.truncatePartitions(Array(InternalRow("5"), InternalRow("6")))
-    }.getMessage
-    assert(errMsg.contains("Partition not found in table test.ns.test_table: 6 -> dt"))
+    }
+    checkError(e,
+      errorClass = "PARTITIONS_NOT_FOUND",
+      parameters = Map("partitionList" -> "PARTITION (`dt` = 6)",
+      "tableName" -> "`test`.`ns`.`test_table`"))
     assert(partTable.rows === InternalRow(2, "zyx", "5") :: Nil)
   }
 }

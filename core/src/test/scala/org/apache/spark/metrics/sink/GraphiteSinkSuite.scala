@@ -89,7 +89,8 @@ class GraphiteSinkSuite extends SparkFunSuite {
       new GraphiteSink(props, registry)
     }
     assert(e.getErrorClass === "GRAPHITE_SINK_PROPERTY_MISSING")
-    assert(e.getMessage === "Graphite sink requires 'host' property.")
+    assert(e.getMessage ===
+      "[GRAPHITE_SINK_PROPERTY_MISSING] Graphite sink requires 'host' property.")
   }
 
   test("GraphiteSink without port") {
@@ -101,7 +102,8 @@ class GraphiteSinkSuite extends SparkFunSuite {
       new GraphiteSink(props, registry)
     }
     assert(e.getErrorClass === "GRAPHITE_SINK_PROPERTY_MISSING")
-    assert(e.getMessage === "Graphite sink requires 'port' property.")
+    assert(e.getMessage ===
+      "[GRAPHITE_SINK_PROPERTY_MISSING] Graphite sink requires 'port' property.")
   }
 
   test("GraphiteSink with invalid protocol") {
@@ -111,10 +113,12 @@ class GraphiteSinkSuite extends SparkFunSuite {
     props.put("protocol", "http")
     val registry = new MetricRegistry
 
-    val e = intercept[SparkException] {
-      new GraphiteSink(props, registry)
-    }
-    assert(e.getErrorClass === "GRAPHITE_SINK_INVALID_PROTOCOL")
-    assert(e.getMessage === "Invalid Graphite protocol: http")
+    checkError(
+      exception = intercept[SparkException] {
+        new GraphiteSink(props, registry)
+      },
+      errorClass = "GRAPHITE_SINK_INVALID_PROTOCOL",
+      parameters = Map("protocol" -> "http")
+    )
   }
 }

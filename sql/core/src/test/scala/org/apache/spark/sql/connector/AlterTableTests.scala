@@ -21,12 +21,16 @@ import scala.collection.JavaConverters._
 
 import org.apache.spark.SparkException
 import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
+import org.apache.spark.sql.catalyst.util.quoteIdentifier
 import org.apache.spark.sql.connector.catalog.CatalogV2Util.withDefaultOwnership
 import org.apache.spark.sql.connector.catalog.Table
+import org.apache.spark.sql.errors.QueryErrorsBase
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types._
 
-trait AlterTableTests extends SharedSparkSession {
+trait AlterTableTests extends SharedSparkSession with QueryErrorsBase {
 
   protected def getTableMetadata(tableName: String): Table
 
@@ -44,14 +48,17 @@ trait AlterTableTests extends SharedSparkSession {
 
   test("AlterTable: table does not exist") {
     val t2 = s"${catalogAndNamespace}fake_table"
+    val quoted = UnresolvedAttribute.parseAttributeName(s"${catalogAndNamespace}table_name")
+      .map(part => quoteIdentifier(part)).mkString(".")
     withTable(t2) {
       sql(s"CREATE TABLE $t2 (id int) USING $v2Format")
       val exc = intercept[AnalysisException] {
         sql(s"ALTER TABLE ${catalogAndNamespace}table_name DROP COLUMN id")
       }
 
-      assert(exc.getMessage.contains(s"${catalogAndNamespace}table_name"))
-      assert(exc.getMessage.contains("Table not found"))
+      checkErrorTableNotFound(exc, quoted,
+        ExpectedContext(s"${catalogAndNamespace}table_name", 12,
+          11 + s"${catalogAndNamespace}table_name".length))
     }
   }
 
@@ -153,7 +160,11 @@ trait AlterTableTests extends SharedSparkSession {
 
       val e1 = intercept[AnalysisException](
         sql(s"ALTER TABLE $t ADD COLUMN c string AFTER non_exist"))
-      assert(e1.getMessage().contains("Couldn't find the reference column"))
+      checkError(
+        exception = e1,
+        errorClass = "FIELD_NOT_FOUND",
+        parameters = Map("fieldName" -> "`c`", "fields" -> "a, point, b")
+      )
 
       sql(s"ALTER TABLE $t ADD COLUMN point.y int FIRST")
       assert(getTableMetadata(tableName).schema == new StructType()
@@ -174,7 +185,11 @@ trait AlterTableTests extends SharedSparkSession {
 
       val e2 = intercept[AnalysisException](
         sql(s"ALTER TABLE $t ADD COLUMN point.x2 int AFTER non_exist"))
-      assert(e2.getMessage().contains("Couldn't find the reference column"))
+      checkError(
+        exception = e2,
+        errorClass = "FIELD_NOT_FOUND",
+        parameters = Map("fieldName" -> "`x2`", "fields" -> "y, x, z")
+      )
     }
   }
 
@@ -211,7 +226,11 @@ trait AlterTableTests extends SharedSparkSession {
       // The new column being referenced should come before being referenced.
       val e = intercept[AnalysisException](
         sql(s"ALTER TABLE $t ADD COLUMNS (yy int AFTER xx, xx int)"))
-      assert(e.getMessage().contains("Couldn't find the reference column for AFTER xx at root"))
+      checkError(
+        exception = e,
+        errorClass = "FIELD_NOT_FOUND",
+        parameters = Map("fieldName" -> "`yy`", "fields" -> "a, x, y, z, b, point")
+      )
     }
   }
 
@@ -310,6 +329,43 @@ trait AlterTableTests extends SharedSparkSession {
     }
   }
 
+  test("SPARK-39383 DEFAULT columns on V2 data sources with ALTER TABLE ADD/ALTER COLUMN") {
+    withSQLConf(SQLConf.DEFAULT_COLUMN_ALLOWED_PROVIDERS.key -> s"$v2Format, ") {
+      val t = s"${catalogAndNamespace}table_name"
+      withTable("t") {
+        sql(s"create table $t (a string) using $v2Format")
+        sql(s"alter table $t add column (b int default 2 + 3)")
+
+        val tableName = fullTableName(t)
+        val table = getTableMetadata(tableName)
+
+        assert(table.name === tableName)
+        assert(table.schema === new StructType()
+          .add("a", StringType)
+          .add(StructField("b", IntegerType)
+            .withCurrentDefaultValue("2 + 3")
+            .withExistenceDefaultValue("5")))
+
+        sql(s"alter table $t alter column b set default 2 + 3")
+
+        assert(
+          getTableMetadata(tableName).schema === new StructType()
+            .add("a", StringType)
+            .add(StructField("b", IntegerType)
+              .withCurrentDefaultValue("2 + 3")
+              .withExistenceDefaultValue("5")))
+
+        sql(s"alter table $t alter column b drop default")
+
+        assert(
+          getTableMetadata(tableName).schema === new StructType()
+            .add("a", StringType)
+            .add(StructField("b", IntegerType)
+              .withExistenceDefaultValue("5")))
+      }
+    }
+  }
+
   test("AlterTable: add complex column") {
     val t = s"${catalogAndNamespace}table_name"
     withTable(t) {
@@ -388,10 +444,12 @@ trait AlterTableTests extends SharedSparkSession {
     val t = s"${catalogAndNamespace}table_name"
     withTable(t) {
       sql(s"CREATE TABLE $t (id int) USING $v2Format")
-      val e = intercept[AnalysisException] {
-        sql(s"ALTER TABLE $t ADD COLUMNS (data string, data1 string, data string)")
-      }
-      assert(e.message.contains("Found duplicate column(s) in the user specified columns: `data`"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          sql(s"ALTER TABLE $t ADD COLUMNS (data string, data1 string, data string)")
+        },
+        errorClass = "COLUMN_ALREADY_EXISTS",
+        parameters = Map("columnName" -> "`data`"))
     }
   }
 
@@ -399,11 +457,12 @@ trait AlterTableTests extends SharedSparkSession {
     val t = s"${catalogAndNamespace}table_name"
     withTable(t) {
       sql(s"CREATE TABLE $t (id int, point struct<x: double, y: double>) USING $v2Format")
-      val e = intercept[AnalysisException] {
-        sql(s"ALTER TABLE $t ADD COLUMNS (point.z double, point.z double, point.xx double)")
-      }
-      assert(e.message.contains(
-        "Found duplicate column(s) in the user specified columns: `point.z`"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          sql(s"ALTER TABLE $t ADD COLUMNS (point.z double, point.z double, point.xx double)")
+        },
+        errorClass = "COLUMN_ALREADY_EXISTS",
+        parameters = Map("columnName" -> toSQLId("point.z")))
     }
   }
 
@@ -1122,34 +1181,6 @@ trait AlterTableTests extends SharedSparkSession {
     }
   }
 
-  test("AlterTable: set location") {
-    val t = s"${catalogAndNamespace}table_name"
-    withTable(t) {
-      sql(s"CREATE TABLE $t (id int) USING $v2Format")
-      sql(s"ALTER TABLE $t SET LOCATION 's3://bucket/path'")
-
-      val tableName = fullTableName(t)
-      val table = getTableMetadata(tableName)
-
-      assert(table.name === tableName)
-      assert(table.properties ===
-        withDefaultOwnership(Map("provider" -> v2Format, "location" -> "s3://bucket/path")).asJava)
-    }
-  }
-
-  test("AlterTable: set partition location") {
-    val t = s"${catalogAndNamespace}table_name"
-    withTable(t) {
-      sql(s"CREATE TABLE $t (id int) USING $v2Format")
-
-      val exc = intercept[AnalysisException] {
-        sql(s"ALTER TABLE $t PARTITION(ds='2017-06-10') SET LOCATION 's3://bucket/path'")
-      }
-      assert(exc.getMessage.contains(
-        "ALTER TABLE SET LOCATION does not support partition for v2 tables"))
-    }
-  }
-
   test("AlterTable: set table property") {
     val t = s"${catalogAndNamespace}table_name"
     withTable(t) {
@@ -1206,10 +1237,12 @@ trait AlterTableTests extends SharedSparkSession {
     val t = s"${catalogAndNamespace}table_name"
     withTable(t) {
       sql(s"CREATE TABLE $t (data string) USING $v2Format")
-      val e = intercept[AnalysisException] {
-        sql(s"ALTER TABLE $t REPLACE COLUMNS (data string, data1 string, data string)")
-      }
-      assert(e.message.contains("Found duplicate column(s) in the user specified columns: `data`"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          sql(s"ALTER TABLE $t REPLACE COLUMNS (data string, data1 string, data string)")
+        },
+        errorClass = "COLUMN_ALREADY_EXISTS",
+        parameters = Map("columnName" -> "`data`"))
     }
   }
 }

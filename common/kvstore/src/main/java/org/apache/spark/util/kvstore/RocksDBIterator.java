@@ -135,11 +135,6 @@ class RocksDBIterator<T> implements KVStoreIterator<T> {
   }
 
   @Override
-  public void remove() {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
   public List<T> next(int max) {
     List<T> list = new ArrayList<>(max);
     while (hasNext() && list.size() < max) {
@@ -150,6 +145,8 @@ class RocksDBIterator<T> implements KVStoreIterator<T> {
 
   @Override
   public boolean skip(long n) {
+    if(closed) return false;
+
     long skipped = 0;
     while (skipped < n) {
       if (next != null) {
@@ -183,6 +180,7 @@ class RocksDBIterator<T> implements KVStoreIterator<T> {
     if (!closed) {
       it.close();
       closed = true;
+      next = null;
     }
   }
 

@@ -109,7 +109,7 @@ object ConstantFolding extends Rule[LogicalPlan] {
  * - Using this mapping, replace occurrence of the attributes with the corresponding constant values
  *   in the AND node.
  */
-object ConstantPropagation extends Rule[LogicalPlan] with PredicateHelper {
+object ConstantPropagation extends Rule[LogicalPlan] {
   def apply(plan: LogicalPlan): LogicalPlan = plan.transformUpWithPruning(
     _.containsAllPatterns(LITERAL, FILTER), ruleId) {
     case f: Filter =>
@@ -316,9 +316,9 @@ object OptimizeIn extends Rule[LogicalPlan] {
  */
 object BooleanSimplification extends Rule[LogicalPlan] with PredicateHelper {
   def apply(plan: LogicalPlan): LogicalPlan = plan.transformWithPruning(
-    _.containsAnyPattern(AND_OR, NOT), ruleId) {
+    _.containsAnyPattern(AND, OR, NOT), ruleId) {
     case q: LogicalPlan => q.transformExpressionsUpWithPruning(
-      _.containsAnyPattern(AND_OR, NOT), ruleId) {
+      _.containsAnyPattern(AND, OR, NOT), ruleId) {
       case TrueLiteral And e => e
       case e And TrueLiteral => e
       case FalseLiteral Or e => e
@@ -532,7 +532,7 @@ object SimplifyBinaryComparison
 /**
  * Simplifies conditional expressions (if / case).
  */
-object SimplifyConditionals extends Rule[LogicalPlan] with PredicateHelper {
+object SimplifyConditionals extends Rule[LogicalPlan] {
   private def falseOrNullLiteral(e: Expression): Boolean = e match {
     case FalseLiteral => true
     case Literal(null, _) => true
@@ -617,12 +617,12 @@ object SimplifyConditionals extends Rule[LogicalPlan] with PredicateHelper {
 /**
  * Push the foldable expression into (if / case) branches.
  */
-object PushFoldableIntoBranches extends Rule[LogicalPlan] with PredicateHelper {
+object PushFoldableIntoBranches extends Rule[LogicalPlan] {
 
   // To be conservative here: it's only a guaranteed win if all but at most only one branch
   // end up being not foldable.
   private def atMostOneUnfoldable(exprs: Seq[Expression]): Boolean = {
-    exprs.filterNot(_.foldable).size < 2
+    exprs.count(!_.foldable) < 2
   }
 
   // Not all UnaryExpression can be pushed into (if / case) branches, e.g. Alias.
@@ -631,7 +631,8 @@ object PushFoldableIntoBranches extends Rule[LogicalPlan] with PredicateHelper {
     case _: UnaryMathExpression | _: Abs | _: Bin | _: Factorial | _: Hex => true
     case _: String2StringExpression | _: Ascii | _: Base64 | _: BitLength | _: Chr | _: Length =>
       true
-    case _: CastBase => true
+    case _: Cast => true
+    case _: TryEval => true
     case _: GetDateField | _: LastDay => true
     case _: ExtractIntervalPart[_] => true
     case _: ArraySetLike => true
@@ -703,7 +704,7 @@ object SupportedBinaryExpr {
  * For example, when the expression is just checking to see if a string starts with a given
  * pattern.
  */
-object LikeSimplification extends Rule[LogicalPlan] {
+object LikeSimplification extends Rule[LogicalPlan] with PredicateHelper {
   // if guards below protect from escapes on trailing %.
   // Cases like "something\%" are not optimized, but this does not affect correctness.
   private val startsWith = "([^_%]+)%".r
@@ -754,12 +755,18 @@ object LikeSimplification extends Rule[LogicalPlan] {
       multi
     } else {
       multi match {
-        case l: LikeAll => And(replacements.reduceLeft(And), l.copy(patterns = remainPatterns))
+        case l: LikeAll =>
+          val and = buildBalancedPredicate(replacements, And)
+          if (remainPatterns.nonEmpty) And(and, l.copy(patterns = remainPatterns)) else and
         case l: NotLikeAll =>
-          And(replacements.map(Not(_)).reduceLeft(And), l.copy(patterns = remainPatterns))
-        case l: LikeAny => Or(replacements.reduceLeft(Or), l.copy(patterns = remainPatterns))
+          val and = buildBalancedPredicate(replacements.map(Not(_)), And)
+          if (remainPatterns.nonEmpty) And(and, l.copy(patterns = remainPatterns)) else and
+        case l: LikeAny =>
+          val or = buildBalancedPredicate(replacements, Or)
+          if (remainPatterns.nonEmpty) Or(or, l.copy(patterns = remainPatterns)) else or
         case l: NotLikeAny =>
-          Or(replacements.map(Not(_)).reduceLeft(Or), l.copy(patterns = remainPatterns))
+          val or = buildBalancedPredicate(replacements.map(Not(_)), Or)
+          if (remainPatterns.nonEmpty) Or(or, l.copy(patterns = remainPatterns)) else or
       }
     }
   }
@@ -947,7 +954,7 @@ object FoldablePropagation extends Rule[LogicalPlan] {
       case j: Join =>
         val (newChildren, foldableMaps) = j.children.map(propagateFoldables).unzip
         val foldableMap = AttributeMap(
-          foldableMaps.foldLeft(Iterable.empty[(Attribute, Alias)])(_ ++ _.baseMap.values).toSeq)
+          foldableMaps.foldLeft(Iterable.empty[(Attribute, Alias)])(_ ++ _.baseMap.values))
         val newJoin =
           replaceFoldable(j.withNewChildren(newChildren).asInstanceOf[Join], foldableMap)
         val missDerivedAttrsSet: AttributeSet = AttributeSet(newJoin.joinType match {
@@ -959,7 +966,7 @@ object FoldablePropagation extends Rule[LogicalPlan] {
         })
         val newFoldableMap = AttributeMap(foldableMap.baseMap.values.filterNot {
           case (attr, _) => missDerivedAttrsSet.contains(attr)
-        }.toSeq)
+        })
         (newJoin, newFoldableMap)
 
       // For other plans, they are not safe to apply foldable propagation, and they should not
@@ -998,6 +1005,7 @@ object FoldablePropagation extends Rule[LogicalPlan] {
     case _: Sample => true
     case _: GlobalLimit => true
     case _: LocalLimit => true
+    case _: Offset => true
     case _: Generate => true
     case _: Distinct => true
     case _: AppendColumns => true
@@ -1032,12 +1040,8 @@ object SimplifyCasts extends Rule[LogicalPlan] {
 
   // Returns whether the from DataType can be safely casted to the to DataType without losing
   // any precision or range.
-  private def isWiderCast(from: DataType, to: NumericType): Boolean = (from, to) match {
-    case (from: NumericType, to: DecimalType) if to.isWiderThan(from) => true
-    case (from: DecimalType, to: NumericType) if from.isTighterThan(to) => true
-    case (from: IntegralType, to: IntegralType) => Cast.canUpCast(from, to)
-    case _ => from == to
-  }
+  private def isWiderCast(from: DataType, to: NumericType): Boolean =
+    from.isInstanceOf[NumericType] && Cast.canUpCast(from, to)
 }
 
 

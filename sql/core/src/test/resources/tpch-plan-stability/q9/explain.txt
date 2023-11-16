@@ -17,30 +17,30 @@
                   :     :     :     :     :- * Project (4)
                   :     :     :     :     :  +- * Filter (3)
                   :     :     :     :     :     +- * ColumnarToRow (2)
-                  :     :     :     :     :        +- Scan parquet default.part (1)
+                  :     :     :     :     :        +- Scan parquet spark_catalog.default.part (1)
                   :     :     :     :     +- BroadcastExchange (8)
                   :     :     :     :        +- * Filter (7)
                   :     :     :     :           +- * ColumnarToRow (6)
-                  :     :     :     :              +- Scan parquet default.lineitem (5)
+                  :     :     :     :              +- Scan parquet spark_catalog.default.lineitem (5)
                   :     :     :     +- BroadcastExchange (14)
                   :     :     :        +- * Filter (13)
                   :     :     :           +- * ColumnarToRow (12)
-                  :     :     :              +- Scan parquet default.supplier (11)
+                  :     :     :              +- Scan parquet spark_catalog.default.supplier (11)
                   :     :     +- BroadcastExchange (20)
                   :     :        +- * Filter (19)
                   :     :           +- * ColumnarToRow (18)
-                  :     :              +- Scan parquet default.partsupp (17)
+                  :     :              +- Scan parquet spark_catalog.default.partsupp (17)
                   :     +- BroadcastExchange (26)
                   :        +- * Filter (25)
                   :           +- * ColumnarToRow (24)
-                  :              +- Scan parquet default.orders (23)
+                  :              +- Scan parquet spark_catalog.default.orders (23)
                   +- BroadcastExchange (32)
                      +- * Filter (31)
                         +- * ColumnarToRow (30)
-                           +- Scan parquet default.nation (29)
+                           +- Scan parquet spark_catalog.default.nation (29)
 
 
-(1) Scan parquet default.part
+(1) Scan parquet spark_catalog.default.part
 Output [2]: [p_partkey#1, p_name#2]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/part]
@@ -58,7 +58,7 @@ Condition : ((isnotnull(p_name#2) AND Contains(p_name#2, green)) AND isnotnull(p
 Output [1]: [p_partkey#1]
 Input [2]: [p_partkey#1, p_name#2]
 
-(5) Scan parquet default.lineitem
+(5) Scan parquet spark_catalog.default.lineitem
 Output [6]: [l_orderkey#3, l_partkey#4, l_suppkey#5, l_quantity#6, l_extendedprice#7, l_discount#8]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/lineitem]
@@ -79,13 +79,14 @@ Arguments: HashedRelationBroadcastMode(List(input[1, bigint, false]),false), [pl
 (9) BroadcastHashJoin [codegen id : 6]
 Left keys [1]: [p_partkey#1]
 Right keys [1]: [l_partkey#4]
+Join type: Inner
 Join condition: None
 
 (10) Project [codegen id : 6]
 Output [6]: [l_orderkey#3, l_partkey#4, l_suppkey#5, l_quantity#6, l_extendedprice#7, l_discount#8]
 Input [7]: [p_partkey#1, l_orderkey#3, l_partkey#4, l_suppkey#5, l_quantity#6, l_extendedprice#7, l_discount#8]
 
-(11) Scan parquet default.supplier
+(11) Scan parquet spark_catalog.default.supplier
 Output [2]: [s_suppkey#9, s_nationkey#10]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/supplier]
@@ -106,13 +107,14 @@ Arguments: HashedRelationBroadcastMode(List(input[0, bigint, false]),false), [pl
 (15) BroadcastHashJoin [codegen id : 6]
 Left keys [1]: [l_suppkey#5]
 Right keys [1]: [s_suppkey#9]
+Join type: Inner
 Join condition: None
 
 (16) Project [codegen id : 6]
 Output [7]: [l_orderkey#3, l_partkey#4, l_suppkey#5, l_quantity#6, l_extendedprice#7, l_discount#8, s_nationkey#10]
 Input [8]: [l_orderkey#3, l_partkey#4, l_suppkey#5, l_quantity#6, l_extendedprice#7, l_discount#8, s_suppkey#9, s_nationkey#10]
 
-(17) Scan parquet default.partsupp
+(17) Scan parquet spark_catalog.default.partsupp
 Output [3]: [ps_partkey#11, ps_suppkey#12, ps_supplycost#13]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/partsupp]
@@ -133,13 +135,14 @@ Arguments: HashedRelationBroadcastMode(List(input[1, bigint, false], input[0, bi
 (21) BroadcastHashJoin [codegen id : 6]
 Left keys [2]: [l_suppkey#5, l_partkey#4]
 Right keys [2]: [ps_suppkey#12, ps_partkey#11]
+Join type: Inner
 Join condition: None
 
 (22) Project [codegen id : 6]
 Output [6]: [l_orderkey#3, l_quantity#6, l_extendedprice#7, l_discount#8, s_nationkey#10, ps_supplycost#13]
 Input [10]: [l_orderkey#3, l_partkey#4, l_suppkey#5, l_quantity#6, l_extendedprice#7, l_discount#8, s_nationkey#10, ps_partkey#11, ps_suppkey#12, ps_supplycost#13]
 
-(23) Scan parquet default.orders
+(23) Scan parquet spark_catalog.default.orders
 Output [2]: [o_orderkey#14, o_orderdate#15]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/orders]
@@ -160,13 +163,14 @@ Arguments: HashedRelationBroadcastMode(List(input[0, bigint, false]),false), [pl
 (27) BroadcastHashJoin [codegen id : 6]
 Left keys [1]: [l_orderkey#3]
 Right keys [1]: [o_orderkey#14]
+Join type: Inner
 Join condition: None
 
 (28) Project [codegen id : 6]
 Output [6]: [l_quantity#6, l_extendedprice#7, l_discount#8, s_nationkey#10, ps_supplycost#13, o_orderdate#15]
 Input [8]: [l_orderkey#3, l_quantity#6, l_extendedprice#7, l_discount#8, s_nationkey#10, ps_supplycost#13, o_orderkey#14, o_orderdate#15]
 
-(29) Scan parquet default.nation
+(29) Scan parquet spark_catalog.default.nation
 Output [2]: [n_nationkey#16, n_name#17]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/nation]
@@ -187,10 +191,11 @@ Arguments: HashedRelationBroadcastMode(List(input[0, bigint, false]),false), [pl
 (33) BroadcastHashJoin [codegen id : 6]
 Left keys [1]: [s_nationkey#10]
 Right keys [1]: [n_nationkey#16]
+Join type: Inner
 Join condition: None
 
 (34) Project [codegen id : 6]
-Output [3]: [n_name#17 AS nation#18, year(o_orderdate#15) AS o_year#19, CheckOverflow((promote_precision(cast(CheckOverflow((promote_precision(cast(l_extendedprice#7 as decimal(11,0))) * promote_precision(CheckOverflow((1 - promote_precision(cast(l_discount#8 as decimal(11,0)))), DecimalType(11,0)))), DecimalType(22,0)) as decimal(23,0))) - promote_precision(cast(CheckOverflow((promote_precision(ps_supplycost#13) * promote_precision(l_quantity#6)), DecimalType(21,0)) as decimal(23,0)))), DecimalType(23,0)) AS amount#20]
+Output [3]: [n_name#17 AS nation#18, year(o_orderdate#15) AS o_year#19, ((l_extendedprice#7 * (1 - l_discount#8)) - (ps_supplycost#13 * l_quantity#6)) AS amount#20]
 Input [8]: [l_quantity#6, l_extendedprice#7, l_discount#8, s_nationkey#10, ps_supplycost#13, o_orderdate#15, n_nationkey#16, n_name#17]
 
 (35) HashAggregate [codegen id : 6]

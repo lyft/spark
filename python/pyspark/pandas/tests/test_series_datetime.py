@@ -52,17 +52,17 @@ class SeriesDateTimeTest(PandasOnSparkTestCase, SQLTestUtils):
         pdf = self.pdf1
         psdf = ps.from_pandas(pdf)
 
-        actual = (psdf["end_date"] - psdf["start_date"] - 1).to_pandas()
+        actual = (psdf["end_date"] - psdf["start_date"] - 1)._to_pandas()
         expected = (pdf["end_date"] - pdf["start_date"]) // np.timedelta64(1, "s") - 1
         self.assert_eq(actual, expected)
 
-        actual = (psdf["end_date"] - pd.Timestamp("2012-1-1 12:45:31") - 1).to_pandas()
+        actual = (psdf["end_date"] - pd.Timestamp("2012-1-1 12:45:31") - 1)._to_pandas()
         expected = (pdf["end_date"] - pd.Timestamp("2012-1-1 12:45:31")) // np.timedelta64(
             1, "s"
         ) - 1
         self.assert_eq(actual, expected)
 
-        actual = (pd.Timestamp("2013-3-11 21:45:00") - psdf["start_date"] - 1).to_pandas()
+        actual = (pd.Timestamp("2013-3-11 21:45:00") - psdf["start_date"] - 1)._to_pandas()
         expected = (pd.Timestamp("2013-3-11 21:45:00") - pdf["start_date"]) // np.timedelta64(
             1, "s"
         ) - 1
@@ -212,7 +212,7 @@ class SeriesDateTimeTest(PandasOnSparkTestCase, SQLTestUtils):
         self.check_func(lambda x: x.dt.dayofyear)
 
     def test_quarter(self):
-        self.check_func(lambda x: x.dt.dayofyear)
+        self.check_func(lambda x: x.dt.quarter)
 
     def test_is_month_start(self):
         self.check_func(lambda x: x.dt.is_month_start)
@@ -287,7 +287,7 @@ if __name__ == "__main__":
     from pyspark.pandas.tests.test_series_datetime import *  # noqa: F401
 
     try:
-        import xmlrunner  # type: ignore[import]
+        import xmlrunner
 
         testRunner = xmlrunner.XMLTestRunner(output="target/test-reports", verbosity=2)
     except ImportError:

@@ -39,7 +39,7 @@ import org.apache.spark.sql.types._
 case class BitwiseAnd(left: Expression, right: Expression) extends BinaryArithmetic
   with CommutativeExpression {
 
-  protected override val failOnError: Boolean = false
+  protected override val evalMode: EvalMode.Value = EvalMode.LEGACY
 
   override def inputType: AbstractDataType = IntegralType
 
@@ -62,7 +62,10 @@ case class BitwiseAnd(left: Expression, right: Expression) extends BinaryArithme
     newLeft: Expression, newRight: Expression): BitwiseAnd = copy(left = newLeft, right = newRight)
 
   override lazy val canonicalized: Expression = {
-    orderCommutative({ case BitwiseAnd(l, r) => Seq(l, r) }).reduce(BitwiseAnd)
+    buildCanonicalizedPlan(
+      { case BitwiseAnd(l, r) => Seq(l, r) },
+      { case (l: Expression, r: Expression) => BitwiseAnd(l, r)}
+    )
   }
 }
 
@@ -83,7 +86,7 @@ case class BitwiseAnd(left: Expression, right: Expression) extends BinaryArithme
 case class BitwiseOr(left: Expression, right: Expression) extends BinaryArithmetic
   with CommutativeExpression {
 
-  protected override val failOnError: Boolean = false
+  protected override val evalMode: EvalMode.Value = EvalMode.LEGACY
 
   override def inputType: AbstractDataType = IntegralType
 
@@ -106,7 +109,10 @@ case class BitwiseOr(left: Expression, right: Expression) extends BinaryArithmet
     newLeft: Expression, newRight: Expression): BitwiseOr = copy(left = newLeft, right = newRight)
 
   override lazy val canonicalized: Expression = {
-    orderCommutative({ case BitwiseOr(l, r) => Seq(l, r) }).reduce(BitwiseOr)
+    buildCanonicalizedPlan(
+      { case BitwiseOr(l, r) => Seq(l, r) },
+      { case (l: Expression, r: Expression) => BitwiseOr(l, r)}
+    )
   }
 }
 
@@ -127,7 +133,7 @@ case class BitwiseOr(left: Expression, right: Expression) extends BinaryArithmet
 case class BitwiseXor(left: Expression, right: Expression) extends BinaryArithmetic
   with CommutativeExpression {
 
-  protected override val failOnError: Boolean = false
+  protected override val evalMode: EvalMode.Value = EvalMode.LEGACY
 
   override def inputType: AbstractDataType = IntegralType
 
@@ -150,7 +156,10 @@ case class BitwiseXor(left: Expression, right: Expression) extends BinaryArithme
     newLeft: Expression, newRight: Expression): BitwiseXor = copy(left = newLeft, right = newRight)
 
   override lazy val canonicalized: Expression = {
-    orderCommutative({ case BitwiseXor(l, r) => Seq(l, r) }).reduce(BitwiseXor)
+    buildCanonicalizedPlan(
+      { case BitwiseXor(l, r) => Seq(l, r) },
+      { case (l: Expression, r: Expression) => BitwiseXor(l, r)}
+    )
   }
 }
 

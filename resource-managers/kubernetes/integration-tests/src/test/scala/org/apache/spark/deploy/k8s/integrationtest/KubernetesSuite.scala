@@ -156,8 +156,8 @@ class KubernetesSuite extends SparkFunSuite
       // Try the spark test home
       sys.props("spark.test.home")
     )
-    val sparkDirProp = possible_spark_dirs.filter(x =>
-      new File(Paths.get(x).toFile, "bin/spark-submit").exists).headOption.getOrElse(null)
+    val sparkDirProp = possible_spark_dirs.find(x =>
+      new File(Paths.get(x).toFile, "bin/spark-submit").exists).orNull
     require(sparkDirProp != null,
       s"Spark home directory must be provided in system properties tested $possible_spark_dirs")
     sparkHomeDir = Paths.get(sparkDirProp)
@@ -465,10 +465,12 @@ class KubernetesSuite extends SparkFunSuite
       .get(0)
     driverPodChecker(driverPod)
 
-    // If we're testing decommissioning we an executors, but we should have an executor
-    // at some point.
-    Eventually.eventually(TIMEOUT, patienceInterval) {
-      execPods.values.nonEmpty should be (true)
+    if (patienceInterval.value.toSeconds.toInt > 0) {
+      // If we're testing decommissioning we an executors, but we should have an executor
+      // at some point.
+      Eventually.eventually(TIMEOUT, patienceInterval) {
+        execPods.values.nonEmpty should be (true)
+      }
     }
     execPods.values.foreach(executorPodChecker(_))
 

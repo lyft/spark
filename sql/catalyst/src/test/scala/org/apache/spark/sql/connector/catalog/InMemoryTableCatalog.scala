@@ -56,7 +56,7 @@ class BasicInMemoryTableCatalog extends TableCatalog {
       case Some(table) =>
         table
       case _ =>
-        throw new NoSuchTableException(ident)
+        throw new NoSuchTableException(ident.asMultipartIdentifier)
     }
   }
 
@@ -66,7 +66,7 @@ class BasicInMemoryTableCatalog extends TableCatalog {
       case Some(table) =>
         table
       case _ =>
-        throw new NoSuchTableException(ident)
+        throw new NoSuchTableException(ident.asMultipartIdentifier)
     }
   }
 
@@ -76,7 +76,7 @@ class BasicInMemoryTableCatalog extends TableCatalog {
       case Some(table) =>
         table
       case _ =>
-        throw new NoSuchTableException(ident)
+        throw new NoSuchTableException(ident.asMultipartIdentifier)
     }
   }
 
@@ -84,6 +84,7 @@ class BasicInMemoryTableCatalog extends TableCatalog {
     invalidatedTables.add(ident)
   }
 
+  // TODO: remove it when no tests calling this deprecated method.
   override def createTable(
       ident: Identifier,
       schema: StructType,
@@ -93,6 +94,15 @@ class BasicInMemoryTableCatalog extends TableCatalog {
       Array.empty, None)
   }
 
+  override def createTable(
+      ident: Identifier,
+      columns: Array[Column],
+      partitions: Array[Transform],
+      properties: util.Map[String, String]): Table = {
+    val schema = CatalogV2Util.v2ColumnsToStructType(columns)
+    createTable(ident, schema, partitions, properties)
+  }
+
   def createTable(
       ident: Identifier,
       schema: StructType,
@@ -100,16 +110,18 @@ class BasicInMemoryTableCatalog extends TableCatalog {
       properties: util.Map[String, String],
       distribution: Distribution,
       ordering: Array[SortOrder],
-      requiredNumPartitions: Option[Int]): Table = {
+      requiredNumPartitions: Option[Int],
+      distributionStrictlyRequired: Boolean = true,
+      numRowsPerSplit: Int = Int.MaxValue): Table = {
     if (tables.containsKey(ident)) {
-      throw new TableAlreadyExistsException(ident)
+      throw new TableAlreadyExistsException(ident.asMultipartIdentifier)
     }
 
     InMemoryTableCatalog.maybeSimulateFailedTableCreation(properties)
 
     val tableName = s"$name.${ident.quoted}"
     val table = new InMemoryTable(tableName, schema, partitions, properties, distribution,
-      ordering, requiredNumPartitions)
+      ordering, requiredNumPartitions, distributionStrictlyRequired, numRowsPerSplit)
     tables.put(ident, table)
     namespaces.putIfAbsent(ident.namespace.toList, Map())
     table
@@ -118,7 +130,7 @@ class BasicInMemoryTableCatalog extends TableCatalog {
   override def alterTable(ident: Identifier, changes: TableChange*): Table = {
     val table = loadTable(ident).asInstanceOf[InMemoryTable]
     val properties = CatalogV2Util.applyPropertiesChanges(table.properties, changes)
-    val schema = CatalogV2Util.applySchemaChanges(table.schema, changes)
+    val schema = CatalogV2Util.applySchemaChanges(table.schema, changes, None, "ALTER TABLE")
 
     // fail if the last column in the schema was dropped
     if (schema.fields.isEmpty) {
@@ -137,14 +149,14 @@ class BasicInMemoryTableCatalog extends TableCatalog {
 
   override def renameTable(oldIdent: Identifier, newIdent: Identifier): Unit = {
     if (tables.containsKey(newIdent)) {
-      throw new TableAlreadyExistsException(newIdent)
+      throw new TableAlreadyExistsException(newIdent.asMultipartIdentifier)
     }
 
     Option(tables.remove(oldIdent)) match {
       case Some(table) =>
         tables.put(newIdent, table)
       case _ =>
-        throw new NoSuchTableException(oldIdent)
+        throw new NoSuchTableException(oldIdent.asMultipartIdentifier)
     }
   }
 
@@ -158,6 +170,14 @@ class BasicInMemoryTableCatalog extends TableCatalog {
 }
 
 class InMemoryTableCatalog extends BasicInMemoryTableCatalog with SupportsNamespaces {
+
+  override def capabilities: java.util.Set[TableCatalogCapability] = {
+    Set(
+      TableCatalogCapability.SUPPORT_COLUMN_DEFAULT_VALUE,
+      TableCatalogCapability.SUPPORTS_CREATE_TABLE_WITH_GENERATED_COLUMNS
+    ).asJava
+  }
+
   protected def allNamespaces: Seq[Seq[String]] = {
     (tables.keySet.asScala.map(_.namespace.toSeq) ++ namespaces.keySet.asScala).toSeq.distinct
   }

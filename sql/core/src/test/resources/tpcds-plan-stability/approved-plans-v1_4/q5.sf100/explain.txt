@@ -16,15 +16,15 @@ TakeOrderedAndProject (77)
                :              :     :  :- * Project (4)
                :              :     :  :  +- * Filter (3)
                :              :     :  :     +- * ColumnarToRow (2)
-               :              :     :  :        +- Scan parquet default.store_sales (1)
+               :              :     :  :        +- Scan parquet spark_catalog.default.store_sales (1)
                :              :     :  +- * Project (8)
                :              :     :     +- * Filter (7)
                :              :     :        +- * ColumnarToRow (6)
-               :              :     :           +- Scan parquet default.store_returns (5)
+               :              :     :           +- Scan parquet spark_catalog.default.store_returns (5)
                :              :     +- BroadcastExchange (13)
                :              :        +- * Filter (12)
                :              :           +- * ColumnarToRow (11)
-               :              :              +- Scan parquet default.store (10)
+               :              :              +- Scan parquet spark_catalog.default.store (10)
                :              +- ReusedExchange (16)
                :- * HashAggregate (42)
                :  +- Exchange (41)
@@ -37,15 +37,15 @@ TakeOrderedAndProject (77)
                :              :     :  :- * Project (25)
                :              :     :  :  +- * Filter (24)
                :              :     :  :     +- * ColumnarToRow (23)
-               :              :     :  :        +- Scan parquet default.catalog_sales (22)
+               :              :     :  :        +- Scan parquet spark_catalog.default.catalog_sales (22)
                :              :     :  +- * Project (29)
                :              :     :     +- * Filter (28)
                :              :     :        +- * ColumnarToRow (27)
-               :              :     :           +- Scan parquet default.catalog_returns (26)
+               :              :     :           +- Scan parquet spark_catalog.default.catalog_returns (26)
                :              :     +- BroadcastExchange (34)
                :              :        +- * Filter (33)
                :              :           +- * ColumnarToRow (32)
-               :              :              +- Scan parquet default.catalog_page (31)
+               :              :              +- Scan parquet spark_catalog.default.catalog_page (31)
                :              +- ReusedExchange (37)
                +- * HashAggregate (71)
                   +- Exchange (70)
@@ -58,27 +58,27 @@ TakeOrderedAndProject (77)
                               :     :  :- * Project (46)
                               :     :  :  +- * Filter (45)
                               :     :  :     +- * ColumnarToRow (44)
-                              :     :  :        +- Scan parquet default.web_sales (43)
+                              :     :  :        +- Scan parquet spark_catalog.default.web_sales (43)
                               :     :  +- * Project (58)
                               :     :     +- * SortMergeJoin Inner (57)
                               :     :        :- * Sort (50)
                               :     :        :  +- Exchange (49)
                               :     :        :     +- * ColumnarToRow (48)
-                              :     :        :        +- Scan parquet default.web_returns (47)
+                              :     :        :        +- Scan parquet spark_catalog.default.web_returns (47)
                               :     :        +- * Sort (56)
                               :     :           +- Exchange (55)
                               :     :              +- * Project (54)
                               :     :                 +- * Filter (53)
                               :     :                    +- * ColumnarToRow (52)
-                              :     :                       +- Scan parquet default.web_sales (51)
+                              :     :                       +- Scan parquet spark_catalog.default.web_sales (51)
                               :     +- BroadcastExchange (63)
                               :        +- * Filter (62)
                               :           +- * ColumnarToRow (61)
-                              :              +- Scan parquet default.web_site (60)
+                              :              +- Scan parquet spark_catalog.default.web_site (60)
                               +- ReusedExchange (66)
 
 
-(1) Scan parquet default.store_sales
+(1) Scan parquet spark_catalog.default.store_sales
 Output [4]: [ss_store_sk#1, ss_ext_sales_price#2, ss_net_profit#3, ss_sold_date_sk#4]
 Batched: true
 Location: InMemoryFileIndex []
@@ -97,7 +97,7 @@ Condition : isnotnull(ss_store_sk#1)
 Output [6]: [ss_store_sk#1 AS store_sk#6, ss_sold_date_sk#4 AS date_sk#7, ss_ext_sales_price#2 AS sales_price#8, ss_net_profit#3 AS profit#9, 0.00 AS return_amt#10, 0.00 AS net_loss#11]
 Input [4]: [ss_store_sk#1, ss_ext_sales_price#2, ss_net_profit#3, ss_sold_date_sk#4]
 
-(5) Scan parquet default.store_returns
+(5) Scan parquet spark_catalog.default.store_returns
 Output [4]: [sr_store_sk#12, sr_return_amt#13, sr_net_loss#14, sr_returned_date_sk#15]
 Batched: true
 Location: InMemoryFileIndex []
@@ -118,7 +118,7 @@ Input [4]: [sr_store_sk#12, sr_return_amt#13, sr_net_loss#14, sr_returned_date_s
 
 (9) Union
 
-(10) Scan parquet default.store
+(10) Scan parquet spark_catalog.default.store
 Output [2]: [s_store_sk#22, s_store_id#23]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/store]
@@ -139,6 +139,7 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, false] as bigint)
 (14) BroadcastHashJoin [codegen id : 5]
 Left keys [1]: [store_sk#6]
 Right keys [1]: [s_store_sk#22]
+Join type: Inner
 Join condition: None
 
 (15) Project [codegen id : 5]
@@ -151,6 +152,7 @@ Output [1]: [d_date_sk#24]
 (17) BroadcastHashJoin [codegen id : 5]
 Left keys [1]: [date_sk#7]
 Right keys [1]: [d_date_sk#24]
+Join type: Inner
 Join condition: None
 
 (18) Project [codegen id : 5]
@@ -173,9 +175,9 @@ Input [5]: [s_store_id#23, sum#29, sum#30, sum#31, sum#32]
 Keys [1]: [s_store_id#23]
 Functions [4]: [sum(UnscaledValue(sales_price#8)), sum(UnscaledValue(return_amt#10)), sum(UnscaledValue(profit#9)), sum(UnscaledValue(net_loss#11))]
 Aggregate Attributes [4]: [sum(UnscaledValue(sales_price#8))#33, sum(UnscaledValue(return_amt#10))#34, sum(UnscaledValue(profit#9))#35, sum(UnscaledValue(net_loss#11))#36]
-Results [5]: [MakeDecimal(sum(UnscaledValue(sales_price#8))#33,17,2) AS sales#37, MakeDecimal(sum(UnscaledValue(return_amt#10))#34,17,2) AS returns#38, CheckOverflow((promote_precision(cast(MakeDecimal(sum(UnscaledValue(profit#9))#35,17,2) as decimal(18,2))) - promote_precision(cast(MakeDecimal(sum(UnscaledValue(net_loss#11))#36,17,2) as decimal(18,2)))), DecimalType(18,2)) AS profit#39, store channel AS channel#40, concat(store, s_store_id#23) AS id#41]
+Results [5]: [MakeDecimal(sum(UnscaledValue(sales_price#8))#33,17,2) AS sales#37, MakeDecimal(sum(UnscaledValue(return_amt#10))#34,17,2) AS returns#38, (MakeDecimal(sum(UnscaledValue(profit#9))#35,17,2) - MakeDecimal(sum(UnscaledValue(net_loss#11))#36,17,2)) AS profit#39, store channel AS channel#40, concat(store, s_store_id#23) AS id#41]
 
-(22) Scan parquet default.catalog_sales
+(22) Scan parquet spark_catalog.default.catalog_sales
 Output [4]: [cs_catalog_page_sk#42, cs_ext_sales_price#43, cs_net_profit#44, cs_sold_date_sk#45]
 Batched: true
 Location: InMemoryFileIndex []
@@ -194,7 +196,7 @@ Condition : isnotnull(cs_catalog_page_sk#42)
 Output [6]: [cs_catalog_page_sk#42 AS page_sk#46, cs_sold_date_sk#45 AS date_sk#47, cs_ext_sales_price#43 AS sales_price#48, cs_net_profit#44 AS profit#49, 0.00 AS return_amt#50, 0.00 AS net_loss#51]
 Input [4]: [cs_catalog_page_sk#42, cs_ext_sales_price#43, cs_net_profit#44, cs_sold_date_sk#45]
 
-(26) Scan parquet default.catalog_returns
+(26) Scan parquet spark_catalog.default.catalog_returns
 Output [4]: [cr_catalog_page_sk#52, cr_return_amount#53, cr_net_loss#54, cr_returned_date_sk#55]
 Batched: true
 Location: InMemoryFileIndex []
@@ -215,7 +217,7 @@ Input [4]: [cr_catalog_page_sk#52, cr_return_amount#53, cr_net_loss#54, cr_retur
 
 (30) Union
 
-(31) Scan parquet default.catalog_page
+(31) Scan parquet spark_catalog.default.catalog_page
 Output [2]: [cp_catalog_page_sk#62, cp_catalog_page_id#63]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/catalog_page]
@@ -236,6 +238,7 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, false] as bigint)
 (35) BroadcastHashJoin [codegen id : 11]
 Left keys [1]: [page_sk#46]
 Right keys [1]: [cp_catalog_page_sk#62]
+Join type: Inner
 Join condition: None
 
 (36) Project [codegen id : 11]
@@ -248,6 +251,7 @@ Output [1]: [d_date_sk#64]
 (38) BroadcastHashJoin [codegen id : 11]
 Left keys [1]: [date_sk#47]
 Right keys [1]: [d_date_sk#64]
+Join type: Inner
 Join condition: None
 
 (39) Project [codegen id : 11]
@@ -270,9 +274,9 @@ Input [5]: [cp_catalog_page_id#63, sum#69, sum#70, sum#71, sum#72]
 Keys [1]: [cp_catalog_page_id#63]
 Functions [4]: [sum(UnscaledValue(sales_price#48)), sum(UnscaledValue(return_amt#50)), sum(UnscaledValue(profit#49)), sum(UnscaledValue(net_loss#51))]
 Aggregate Attributes [4]: [sum(UnscaledValue(sales_price#48))#73, sum(UnscaledValue(return_amt#50))#74, sum(UnscaledValue(profit#49))#75, sum(UnscaledValue(net_loss#51))#76]
-Results [5]: [MakeDecimal(sum(UnscaledValue(sales_price#48))#73,17,2) AS sales#77, MakeDecimal(sum(UnscaledValue(return_amt#50))#74,17,2) AS returns#78, CheckOverflow((promote_precision(cast(MakeDecimal(sum(UnscaledValue(profit#49))#75,17,2) as decimal(18,2))) - promote_precision(cast(MakeDecimal(sum(UnscaledValue(net_loss#51))#76,17,2) as decimal(18,2)))), DecimalType(18,2)) AS profit#79, catalog channel AS channel#80, concat(catalog_page, cp_catalog_page_id#63) AS id#81]
+Results [5]: [MakeDecimal(sum(UnscaledValue(sales_price#48))#73,17,2) AS sales#77, MakeDecimal(sum(UnscaledValue(return_amt#50))#74,17,2) AS returns#78, (MakeDecimal(sum(UnscaledValue(profit#49))#75,17,2) - MakeDecimal(sum(UnscaledValue(net_loss#51))#76,17,2)) AS profit#79, catalog channel AS channel#80, concat(catalog_page, cp_catalog_page_id#63) AS id#81]
 
-(43) Scan parquet default.web_sales
+(43) Scan parquet spark_catalog.default.web_sales
 Output [4]: [ws_web_site_sk#82, ws_ext_sales_price#83, ws_net_profit#84, ws_sold_date_sk#85]
 Batched: true
 Location: InMemoryFileIndex []
@@ -291,7 +295,7 @@ Condition : isnotnull(ws_web_site_sk#82)
 Output [6]: [ws_web_site_sk#82 AS wsr_web_site_sk#86, ws_sold_date_sk#85 AS date_sk#87, ws_ext_sales_price#83 AS sales_price#88, ws_net_profit#84 AS profit#89, 0.00 AS return_amt#90, 0.00 AS net_loss#91]
 Input [4]: [ws_web_site_sk#82, ws_ext_sales_price#83, ws_net_profit#84, ws_sold_date_sk#85]
 
-(47) Scan parquet default.web_returns
+(47) Scan parquet spark_catalog.default.web_returns
 Output [5]: [wr_item_sk#92, wr_order_number#93, wr_return_amt#94, wr_net_loss#95, wr_returned_date_sk#96]
 Batched: true
 Location: InMemoryFileIndex []
@@ -309,7 +313,7 @@ Arguments: hashpartitioning(wr_item_sk#92, wr_order_number#93, 5), ENSURE_REQUIR
 Input [5]: [wr_item_sk#92, wr_order_number#93, wr_return_amt#94, wr_net_loss#95, wr_returned_date_sk#96]
 Arguments: [wr_item_sk#92 ASC NULLS FIRST, wr_order_number#93 ASC NULLS FIRST], false, 0
 
-(51) Scan parquet default.web_sales
+(51) Scan parquet spark_catalog.default.web_sales
 Output [4]: [ws_item_sk#97, ws_web_site_sk#98, ws_order_number#99, ws_sold_date_sk#100]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/web_sales]
@@ -338,6 +342,7 @@ Arguments: [ws_item_sk#97 ASC NULLS FIRST, ws_order_number#99 ASC NULLS FIRST], 
 (57) SortMergeJoin [codegen id : 18]
 Left keys [2]: [wr_item_sk#92, wr_order_number#93]
 Right keys [2]: [ws_item_sk#97, ws_order_number#99]
+Join type: Inner
 Join condition: None
 
 (58) Project [codegen id : 18]
@@ -346,7 +351,7 @@ Input [8]: [wr_item_sk#92, wr_order_number#93, wr_return_amt#94, wr_net_loss#95,
 
 (59) Union
 
-(60) Scan parquet default.web_site
+(60) Scan parquet spark_catalog.default.web_site
 Output [2]: [web_site_sk#107, web_site_id#108]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/web_site]
@@ -367,6 +372,7 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, false] as bigint)
 (64) BroadcastHashJoin [codegen id : 21]
 Left keys [1]: [wsr_web_site_sk#86]
 Right keys [1]: [web_site_sk#107]
+Join type: Inner
 Join condition: None
 
 (65) Project [codegen id : 21]
@@ -379,6 +385,7 @@ Output [1]: [d_date_sk#109]
 (67) BroadcastHashJoin [codegen id : 21]
 Left keys [1]: [date_sk#87]
 Right keys [1]: [d_date_sk#109]
+Join type: Inner
 Join condition: None
 
 (68) Project [codegen id : 21]
@@ -401,7 +408,7 @@ Input [5]: [web_site_id#108, sum#114, sum#115, sum#116, sum#117]
 Keys [1]: [web_site_id#108]
 Functions [4]: [sum(UnscaledValue(sales_price#88)), sum(UnscaledValue(return_amt#90)), sum(UnscaledValue(profit#89)), sum(UnscaledValue(net_loss#91))]
 Aggregate Attributes [4]: [sum(UnscaledValue(sales_price#88))#118, sum(UnscaledValue(return_amt#90))#119, sum(UnscaledValue(profit#89))#120, sum(UnscaledValue(net_loss#91))#121]
-Results [5]: [MakeDecimal(sum(UnscaledValue(sales_price#88))#118,17,2) AS sales#122, MakeDecimal(sum(UnscaledValue(return_amt#90))#119,17,2) AS returns#123, CheckOverflow((promote_precision(cast(MakeDecimal(sum(UnscaledValue(profit#89))#120,17,2) as decimal(18,2))) - promote_precision(cast(MakeDecimal(sum(UnscaledValue(net_loss#91))#121,17,2) as decimal(18,2)))), DecimalType(18,2)) AS profit#124, web channel AS channel#125, concat(web_site, web_site_id#108) AS id#126]
+Results [5]: [MakeDecimal(sum(UnscaledValue(sales_price#88))#118,17,2) AS sales#122, MakeDecimal(sum(UnscaledValue(return_amt#90))#119,17,2) AS returns#123, (MakeDecimal(sum(UnscaledValue(profit#89))#120,17,2) - MakeDecimal(sum(UnscaledValue(net_loss#91))#121,17,2)) AS profit#124, web channel AS channel#125, concat(web_site, web_site_id#108) AS id#126]
 
 (72) Union
 
@@ -438,10 +445,10 @@ BroadcastExchange (82)
 +- * Project (81)
    +- * Filter (80)
       +- * ColumnarToRow (79)
-         +- Scan parquet default.date_dim (78)
+         +- Scan parquet spark_catalog.default.date_dim (78)
 
 
-(78) Scan parquet default.date_dim
+(78) Scan parquet spark_catalog.default.date_dim
 Output [2]: [d_date_sk#24, d_date#148]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/date_dim]

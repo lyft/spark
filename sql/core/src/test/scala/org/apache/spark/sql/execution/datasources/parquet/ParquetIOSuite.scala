@@ -36,6 +36,7 @@ import org.apache.parquet.hadoop._
 import org.apache.parquet.hadoop.example.ExampleParquetWriter
 import org.apache.parquet.hadoop.metadata.CompressionCodecName
 import org.apache.parquet.hadoop.metadata.CompressionCodecName.GZIP
+import org.apache.parquet.io.api.Binary
 import org.apache.parquet.schema.{MessageType, MessageTypeParser}
 
 import org.apache.spark.{SPARK_VERSION_SHORT, SparkException, TestUtils}
@@ -111,6 +112,41 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
     }
   }
 
+  test("SPARK-41096: FIXED_LEN_BYTE_ARRAY support") {
+    Seq(true, false).foreach { dictionaryEnabled =>
+      def makeRawParquetFile(path: Path): Unit = {
+        val schemaStr =
+          """message root {
+            |  required FIXED_LEN_BYTE_ARRAY(1) a;
+            |  required FIXED_LEN_BYTE_ARRAY(3) b;
+            |}
+        """.stripMargin
+        val schema = MessageTypeParser.parseMessageType(schemaStr)
+
+        val writer = createParquetWriter(schema, path, dictionaryEnabled)
+
+        (0 until 10).map(_.toString).foreach { n =>
+          val record = new SimpleGroup(schema)
+          record.add(0, Binary.fromString(n))
+          record.add(1, Binary.fromString(n + n + n))
+          writer.write(record)
+        }
+        writer.close()
+      }
+
+      withTempDir { dir =>
+        val path = new Path(dir.toURI.toString, "part-r-0.parquet")
+        makeRawParquetFile(path)
+        Seq(true, false).foreach { vectorizedReaderEnabled =>
+          readParquetFile(path.toString, vectorizedReaderEnabled) { df =>
+            checkAnswer(df, (48 until 58).map(n => // char '0' is 48 in ascii
+              Row(Array(n), Array(n, n, n))))
+          }
+        }
+      }
+    }
+  }
+
   test("string") {
     val data = (1 to 4).map(i => Tuple1(i.toString))
     // Property spark.sql.parquet.binaryAsString shouldn't affect Parquet files written by Spark SQL
@@ -120,10 +156,12 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
   }
 
   test("SPARK-36182: TimestampNTZ") {
-    val data = Seq("2021-01-01T00:00:00", "1970-07-15T01:02:03.456789")
-      .map(ts => Tuple1(LocalDateTime.parse(ts)))
-    withAllParquetReaders {
-      checkParquetFile(data)
+    withSQLConf(SQLConf.PARQUET_INFER_TIMESTAMP_NTZ_ENABLED.key -> "true") {
+      val data = Seq("2021-01-01T00:00:00", "1970-07-15T01:02:03.456789")
+        .map(ts => Tuple1(LocalDateTime.parse(ts)))
+      withAllParquetReaders {
+        checkParquetFile(data)
+      }
     }
   }
 
@@ -155,27 +193,58 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
         }
         writer.close
 
-        withAllParquetReaders {
-          val df = spark.read.parquet(tablePath.toString)
-          assertResult(df.schema) {
+        for (inferTimestampNTZ <- Seq(true, false)) {
+          withSQLConf(SQLConf.PARQUET_INFER_TIMESTAMP_NTZ_ENABLED.key -> s"$inferTimestampNTZ") {
+            val timestampNTZType = if (inferTimestampNTZ) TimestampNTZType else TimestampType
+
+            withAllParquetReaders {
+              val df = spark.read.parquet(tablePath.toString)
+              assertResult(df.schema) {
+                StructType(
+                  StructField("timestamp_ltz_millis_depr", TimestampType, nullable = true) ::
+                  StructField("timestamp_ltz_micros_depr", TimestampType, nullable = true) ::
+                  StructField("timestamp_ltz_millis", TimestampType, nullable = true) ::
+                  StructField("timestamp_ltz_micros", TimestampType, nullable = true) ::
+                  StructField("timestamp_ntz_millis", timestampNTZType, nullable = true) ::
+                  StructField("timestamp_ntz_micros", timestampNTZType, nullable = true) ::
+                  Nil
+                )
+              }
+
+              val ltz_value = new java.sql.Timestamp(1000L)
+              val ntz_value = LocalDateTime.of(1970, 1, 1, 0, 0, 1)
+
+              val exp = if (inferTimestampNTZ) {
+                (0 until numRecords).map { _ =>
+                  (ltz_value, ltz_value, ltz_value, ltz_value, ntz_value, ntz_value)
+                }.toDF()
+              } else {
+                (0 until numRecords).map { _ =>
+                  (ltz_value, ltz_value, ltz_value, ltz_value, ltz_value, ltz_value)
+                }.toDF()
+              }
+
+              checkAnswer(df, exp)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  test("Write TimestampNTZ type") {
+    // The configuration PARQUET_INFER_TIMESTAMP_NTZ_ENABLED doesn't affect the behavior of writes.
+    Seq(true, false).foreach { inferTimestampNTZ =>
+      withSQLConf(SQLConf.PARQUET_INFER_TIMESTAMP_NTZ_ENABLED.key -> inferTimestampNTZ.toString) {
+        withTempPath { dir =>
+          val data = Seq(LocalDateTime.parse("2021-01-01T00:00:00")).toDF("col")
+          data.write.parquet(dir.getCanonicalPath)
+          assertResult(spark.read.parquet(dir.getCanonicalPath).schema) {
             StructType(
-              StructField("timestamp_ltz_millis_depr", TimestampType, nullable = true) ::
-              StructField("timestamp_ltz_micros_depr", TimestampType, nullable = true) ::
-              StructField("timestamp_ltz_millis", TimestampType, nullable = true) ::
-              StructField("timestamp_ltz_micros", TimestampType, nullable = true) ::
-              StructField("timestamp_ntz_millis", TimestampNTZType, nullable = true) ::
-              StructField("timestamp_ntz_micros", TimestampNTZType, nullable = true) ::
-              Nil
+              StructField("col", TimestampNTZType, nullable = true) ::
+                Nil
             )
           }
-
-          val exp = (0 until numRecords).map { _ =>
-            val ltz_value = new java.sql.Timestamp(1000L)
-            val ntz_value = LocalDateTime.of(1970, 1, 1, 0, 0, 1)
-            (ltz_value, ltz_value, ltz_value, ltz_value, ntz_value, ntz_value)
-          }.toDF()
-
-          checkAnswer(df, exp)
         }
       }
     }
@@ -187,7 +256,7 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
         .range(1000)
         // Parquet doesn't allow column names with spaces, have to add an alias here.
         // Minus 500 here so that negative decimals are also tested.
-        .select(((Symbol("id") - 500) / 100.0) cast decimal as Symbol("dec"))
+        .select((($"id" - 500) / 100.0) cast decimal as Symbol("dec"))
         .coalesce(1)
     }
 
@@ -1123,9 +1192,9 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
           classOf[JobCommitFailureParquetOutputCommitter].getCanonicalName
       )
       withTempPath { dir =>
-        val message = intercept[SparkException] {
+        val message = intercept[RuntimeException] {
           spark.range(0, 1).write.options(extraOptions).parquet(dir.getCanonicalPath)
-        }.getCause.getMessage
+        }.getMessage
         assert(message === "Intentional exception for testing purposes")
       }
     }
@@ -1140,7 +1209,8 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
     val errorMessage = intercept[Throwable] {
       spark.read.parquet("hdfs://nonexistent")
     }.toString
-    assert(errorMessage.contains("UnknownHostException"))
+    assert(errorMessage.contains("UnknownHostException") ||
+        errorMessage.contains("is not a valid DFS filename"))
   }
 
   test("SPARK-7837 Do not close output writer twice when commitTask() fails") {
@@ -1159,16 +1229,16 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
       withTempPath { dir =>
         val m1 = intercept[SparkException] {
           spark.range(1).coalesce(1).write.options(extraOptions).parquet(dir.getCanonicalPath)
-        }.getCause.getMessage
+        }.getMessage
         assert(m1.contains("Intentional exception for testing purposes"))
       }
 
       withTempPath { dir =>
         val m2 = intercept[SparkException] {
-          val df = spark.range(1).select(Symbol("id") as Symbol("a"), Symbol("id") as Symbol("b"))
+          val df = spark.range(1).select($"id" as Symbol("a"), $"id" as Symbol("b"))
             .coalesce(1)
           df.write.partitionBy("a").options(extraOptions).parquet(dir.getCanonicalPath)
-        }.getCause.getMessage
+        }.getMessage
         assert(m2.contains("Intentional exception for testing purposes"))
       }
     }
@@ -1232,7 +1302,7 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
       checkAnswer(
         // Decimal column in this file is encoded using plain dictionary
         readResourceParquetFile("test-data/dec-in-i32.parquet"),
-        spark.range(1 << 4).select(Symbol("id") % 10 cast DecimalType(5, 2) as Symbol("i32_dec")))
+        spark.range(1 << 4).select($"id" % 10 cast DecimalType(5, 2) as Symbol("i32_dec")))
     }
   }
 
@@ -1241,7 +1311,7 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
       checkAnswer(
         // Decimal column in this file is encoded using plain dictionary
         readResourceParquetFile("test-data/dec-in-i64.parquet"),
-        spark.range(1 << 4).select(Symbol("id") % 10 cast DecimalType(10, 2) as Symbol("i64_dec")))
+        spark.range(1 << 4).select($"id" % 10 cast DecimalType(10, 2) as Symbol("i64_dec")))
     }
   }
 
@@ -1251,7 +1321,7 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
         // Decimal column in this file is encoded using plain dictionary
         readResourceParquetFile("test-data/dec-in-fixed-len.parquet"),
         spark.range(1 << 4)
-          .select(Symbol("id") % 10 cast DecimalType(10, 2) as Symbol("fixed_len_dec")))
+          .select($"id" % 10 cast DecimalType(10, 2) as Symbol("fixed_len_dec")))
     }
   }
 
@@ -1262,6 +1332,16 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
         // and dictionary encodings.
         readResourceParquetFile("test-data/timemillis-in-i64.parquet"),
         (1 to 3).map(i => Row(new java.sql.Timestamp(10))))
+    }
+  }
+
+  test("SPARK-40128 read DELTA_LENGTH_BYTE_ARRAY encoded strings") {
+    withAllParquetReaders {
+      checkAnswer(
+        // "fruit" column in this file is encoded using DELTA_LENGTH_BYTE_ARRAY.
+        // The file comes from https://github.com/apache/parquet-testing
+        readResourceParquetFile("test-data/delta_length_byte_array.parquet"),
+        (0 to 999).map(i => Row("apple_banana_mango" + Integer.toString(i * i))))
     }
   }
 
@@ -1431,6 +1511,16 @@ class ParquetIOSuite extends QueryTest with ParquetTest with SharedSparkSession 
       val option = new ParquetOptions(Map("Compression" -> "uncompressed"), spark.sessionState.conf)
       assert(option.compressionCodecClassName == "UNCOMPRESSED")
     }
+  }
+
+  test("SPARK-40667: validate Parquet Options") {
+    assert(ParquetOptions.getAllOptions.size == 5)
+    // Please add validation on any new parquet options here
+    assert(ParquetOptions.isValidOption("mergeSchema"))
+    assert(ParquetOptions.isValidOption("compression"))
+    assert(ParquetOptions.isValidOption("parquet.compression"))
+    assert(ParquetOptions.isValidOption("datetimeRebaseMode"))
+    assert(ParquetOptions.isValidOption("int96RebaseMode"))
   }
 
   test("SPARK-23173 Writing a file with data converted from JSON with and incorrect user schema") {

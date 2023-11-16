@@ -119,7 +119,7 @@ package object util extends Logging {
       PrettyAttribute(usePrettyExpression(e.child) + "." + e.field.name, e.dataType)
     case r: InheritAnalysisRules =>
       PrettyAttribute(r.makeSQLString(r.parameters.map(toPrettySQL)), r.dataType)
-    case c: CastBase if !c.getTagValue(Cast.USER_SPECIFIED_CAST).getOrElse(false) =>
+    case c: Cast if !c.getTagValue(Cast.USER_SPECIFIED_CAST).getOrElse(false) =>
       PrettyAttribute(usePrettyExpression(c.child).sql, c.dataType)
     case p: PythonUDF => PrettyPythonUDF(p.name, p.dataType, p.children)
   }
@@ -128,6 +128,10 @@ package object util extends Logging {
     // Escapes back-ticks within the identifier name with double-back-ticks, and then quote the
     // identifier with back-ticks.
     "`" + name.replace("`", "``") + "`"
+  }
+
+  def quoteNameParts(name: Seq[String]): String = {
+    name.map(part => quoteIdentifier(part)).mkString(".")
   }
 
   def quoteIfNeeded(part: String): String = {
@@ -208,5 +212,18 @@ package object util extends Logging {
         .putBoolean(QUALIFIED_ACCESS_ONLY, true)
         .build()
     )
+
+    def markAsAllowAnyAccess(): Attribute = {
+      if (qualifiedAccessOnly) {
+        attr.withMetadata(
+          new MetadataBuilder()
+            .withMetadata(attr.metadata)
+            .remove(QUALIFIED_ACCESS_ONLY)
+            .build()
+        )
+      } else {
+        attr
+      }
+    }
   }
 }

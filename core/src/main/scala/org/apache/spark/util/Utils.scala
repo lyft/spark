@@ -19,7 +19,7 @@ package org.apache.spark.util
 
 import java.io._
 import java.lang.{Byte => JByte}
-import java.lang.management.{LockInfo, ManagementFactory, MonitorInfo, ThreadInfo}
+import java.lang.management.{LockInfo, ManagementFactory, MonitorInfo, PlatformManagedObject, ThreadInfo}
 import java.lang.reflect.InvocationTargetException
 import java.math.{MathContext, RoundingMode}
 import java.net._
@@ -74,6 +74,7 @@ import org.apache.spark.launcher.SparkLauncher
 import org.apache.spark.network.util.JavaUtils
 import org.apache.spark.serializer.{DeserializationStream, SerializationStream, Serializer, SerializerInstance}
 import org.apache.spark.status.api.v1.{StackTrace, ThreadStackTrace}
+import org.apache.spark.util.collection.{Utils => CUtils}
 import org.apache.spark.util.io.ChunkedByteBufferOutputStream
 
 /** CallSite represents a place in user code. It can have a short and a long form. */
@@ -109,6 +110,12 @@ private[spark] object Utils extends Logging {
   private val weakStringInterner = Interners.newWeakInterner[String]()
 
   private val PATTERN_FOR_COMMAND_LINE_ARG = "-D(.+?)=(.+)".r
+
+  private val COPY_BUFFER_LEN = 1024
+
+  private val copyBuffer = ThreadLocal.withInitial[Array[Byte]](() => {
+    new Array[Byte](COPY_BUFFER_LEN)
+  })
 
   /** Serialize an object using Java serialization */
   def serialize[T](o: T): Array[Byte] = {
@@ -236,34 +243,39 @@ private[spark] object Utils extends Logging {
     }
   }
 
+  private def writeByteBufferImpl(bb: ByteBuffer, writer: (Array[Byte], Int, Int) => Unit): Unit = {
+    if (bb.hasArray) {
+      // Avoid extra copy if the bytebuffer is backed by bytes array
+      writer(bb.array(), bb.arrayOffset() + bb.position(), bb.remaining())
+    } else {
+      // Fallback to copy approach
+      val buffer = {
+        // reuse the copy buffer from thread local
+        copyBuffer.get()
+      }
+      val originalPosition = bb.position()
+      var bytesToCopy = Math.min(bb.remaining(), COPY_BUFFER_LEN)
+      while (bytesToCopy > 0) {
+        bb.get(buffer, 0, bytesToCopy)
+        writer(buffer, 0, bytesToCopy)
+        bytesToCopy = Math.min(bb.remaining(), COPY_BUFFER_LEN)
+      }
+      bb.position(originalPosition)
+    }
+  }
+
   /**
    * Primitive often used when writing [[java.nio.ByteBuffer]] to [[java.io.DataOutput]]
    */
   def writeByteBuffer(bb: ByteBuffer, out: DataOutput): Unit = {
-    if (bb.hasArray) {
-      out.write(bb.array(), bb.arrayOffset() + bb.position(), bb.remaining())
-    } else {
-      val originalPosition = bb.position()
-      val bbval = new Array[Byte](bb.remaining())
-      bb.get(bbval)
-      out.write(bbval)
-      bb.position(originalPosition)
-    }
+    writeByteBufferImpl(bb, out.write)
   }
 
   /**
    * Primitive often used when writing [[java.nio.ByteBuffer]] to [[java.io.OutputStream]]
    */
   def writeByteBuffer(bb: ByteBuffer, out: OutputStream): Unit = {
-    if (bb.hasArray) {
-      out.write(bb.array(), bb.arrayOffset() + bb.position(), bb.remaining())
-    } else {
-      val originalPosition = bb.position()
-      val bbval = new Array[Byte](bb.remaining())
-      bb.get(bbval)
-      out.write(bbval)
-      bb.position(originalPosition)
-    }
+    writeByteBufferImpl(bb, out.write)
   }
 
   /**
@@ -308,29 +320,15 @@ private[spark] object Utils extends Logging {
    * newly created, and is not marked for automatic deletion.
    */
   def createDirectory(root: String, namePrefix: String = "spark"): File = {
-    var attempts = 0
-    val maxAttempts = MAX_DIR_CREATION_ATTEMPTS
-    var dir: File = null
-    while (dir == null) {
-      attempts += 1
-      if (attempts > maxAttempts) {
-        throw new IOException("Failed to create a temp directory (under " + root + ") after " +
-          maxAttempts + " attempts!")
-      }
-      try {
-        dir = new File(root, namePrefix + "-" + UUID.randomUUID.toString)
-        // SPARK-35907:
-        // This could throw more meaningful exception information if directory creation failed.
-        Files.createDirectories(dir.toPath)
-      } catch {
-        case e @ (_ : IOException | _ : SecurityException) =>
-          logError(s"Failed to create directory $dir", e)
-          dir = null
-      }
-    }
-
-    dir.getCanonicalFile
+    JavaUtils.createDirectory(root, namePrefix)
   }
+
+  /**
+   * Create a temporary directory inside the `java.io.tmpdir` prefixed with `spark`.
+   * The directory will be automatically deleted when the VM shuts down.
+   */
+  def createTempDir(): File =
+    createTempDir(System.getProperty("java.io.tmpdir"), "spark")
 
   /**
    * Create a temporary directory inside the given parent directory. The directory will be
@@ -1094,21 +1092,48 @@ private[spark] object Utils extends Logging {
    * Get the local machine's FQDN.
    */
   def localCanonicalHostName(): String = {
-    customHostname.getOrElse(localIpAddress.getCanonicalHostName)
+    addBracketsIfNeeded(customHostname.getOrElse(localIpAddress.getCanonicalHostName))
   }
 
   /**
    * Get the local machine's hostname.
+   * In case of IPv6, getHostAddress may return '0:0:0:0:0:0:0:1'.
    */
   def localHostName(): String = {
-    customHostname.getOrElse(localIpAddress.getHostAddress)
+    addBracketsIfNeeded(customHostname.getOrElse(localIpAddress.getHostAddress))
   }
 
   /**
    * Get the local machine's URI.
    */
   def localHostNameForURI(): String = {
-    customHostname.getOrElse(InetAddresses.toUriString(localIpAddress))
+    addBracketsIfNeeded(customHostname.getOrElse(InetAddresses.toUriString(localIpAddress)))
+  }
+
+  private[spark] def addBracketsIfNeeded(addr: String): String = {
+    if (addr.contains(":") && !addr.contains("[")) {
+      "[" + addr + "]"
+    } else {
+      addr
+    }
+  }
+
+  /**
+   * Normalize IPv6 IPs and no-op on all other hosts.
+   */
+  private[spark] def normalizeIpIfNeeded(host: String): String = {
+    // Is this a v6 address. We ask users to add [] around v6 addresses as strs but
+    // there not always there. If it's just 0-9 and : and [] we treat it as a v6 address.
+    // This means some invalid addresses are treated as v6 addresses, but since they are
+    // not valid hostnames it doesn't matter.
+    // See https://www.rfc-editor.org/rfc/rfc1123#page-13 for context around valid hostnames.
+    val addressRe = """^\[{0,1}([0-9:]+?:[0-9]*)\]{0,1}$""".r
+    host match {
+      case addressRe(unbracketed) =>
+        addBracketsIfNeeded(InetAddresses.toAddrString(InetAddresses.forString(unbracketed)))
+      case _ =>
+        host
+    }
   }
 
   /**
@@ -1732,7 +1757,8 @@ private[spark] object Utils extends Logging {
     assert(files.length == fileLengths.length)
     val startIndex = math.max(start, 0)
     val endIndex = math.min(end, fileLengths.sum)
-    val fileToLength = files.zip(fileLengths).toMap
+    val fileToLength = CUtils.toMap(files, fileLengths)
+
     logDebug("Log files: \n" + fileToLength.mkString("\n"))
 
     val stringBuffer = new StringBuffer((endIndex - startIndex).toInt)
@@ -1922,18 +1948,9 @@ private[spark] object Utils extends Logging {
   }
 
   /**
-   * Counts the number of elements of an iterator using a while loop rather than calling
-   * [[scala.collection.Iterator#size]] because it uses a for loop, which is slightly slower
-   * in the current version of Scala.
+   * Counts the number of elements of an iterator.
    */
-  def getIteratorSize(iterator: Iterator[_]): Long = {
-    var count = 0L
-    while (iterator.hasNext) {
-      count += 1L
-      iterator.next()
-    }
-    count
-  }
+  def getIteratorSize(iterator: Iterator[_]): Long = Iterators.size(iterator)
 
   /**
    * Generate a zipWithIndex iterator, avoid index value overflowing problem
@@ -2001,6 +2018,11 @@ private[spark] object Utils extends Logging {
    * Whether the underlying operating system is Mac OS X and processor is Apple Silicon.
    */
   val isMacOnAppleSilicon = SystemUtils.IS_OS_MAC_OSX && SystemUtils.OS_ARCH.equals("aarch64")
+
+  /**
+   * Whether the underlying JVM prefer IPv6 addresses.
+   */
+  val preferIPv6 = "true".equals(System.getProperty("java.net.preferIPv6Addresses"))
 
   /**
    * Pattern for matching a Windows drive, which contains only a single alphabet character.
@@ -2824,7 +2846,8 @@ private[spark] object Utils extends Logging {
    * Redact the sensitive values in the given map. If a map key matches the redaction pattern then
    * its value is replaced with a dummy text.
    */
-  def redact(conf: SparkConf, kvs: Seq[(String, String)]): Seq[(String, String)] = {
+  def redact(conf: SparkConf,
+      kvs: scala.collection.Seq[(String, String)]): scala.collection.Seq[(String, String)] = {
     val redactionPattern = conf.get(SECRET_REDACTION_PATTERN)
     redact(redactionPattern, kvs)
   }
@@ -2833,7 +2856,8 @@ private[spark] object Utils extends Logging {
    * Redact the sensitive values in the given map. If a map key matches the redaction pattern then
    * its value is replaced with a dummy text.
    */
-  def redact[K, V](regex: Option[Regex], kvs: Seq[(K, V)]): Seq[(K, V)] = {
+  def redact[K, V](regex: Option[Regex],
+      kvs: scala.collection.Seq[(K, V)]): scala.collection.Seq[(K, V)] = {
     regex match {
       case None => kvs
       case Some(r) => redact(r, kvs)
@@ -2855,7 +2879,8 @@ private[spark] object Utils extends Logging {
     }
   }
 
-  private def redact[K, V](redactionPattern: Regex, kvs: Seq[(K, V)]): Seq[(K, V)] = {
+  private def redact[K, V](redactionPattern: Regex,
+      kvs: scala.collection.Seq[(K, V)]): scala.collection.Seq[(K, V)] = {
     // If the sensitive information regex matches with either the key or the value, redact the value
     // While the original intent was to only redact the value if the key matched with the regex,
     // we've found that especially in verbose mode, the value of the property may contain sensitive
@@ -2881,7 +2906,7 @@ private[spark] object Utils extends Logging {
           .getOrElse((key, value))
       case (key, value) =>
         (key, value)
-    }.asInstanceOf[Seq[(K, V)]]
+    }.asInstanceOf[scala.collection.Seq[(K, V)]]
   }
 
   /**
@@ -2890,7 +2915,7 @@ private[spark] object Utils extends Logging {
    * redacted. So theoretically, the property itself could be configured to redact its own value
    * when printing.
    */
-  def redact(kvs: Map[String, String]): Seq[(String, String)] = {
+  def redact(kvs: Map[String, String]): scala.collection.Seq[(String, String)] = {
     val redactionPattern = kvs.getOrElse(
       SECRET_REDACTION_PATTERN.key,
       SECRET_REDACTION_PATTERN.defaultValueString
@@ -3080,7 +3105,7 @@ private[spark] object Utils extends Logging {
    * and return the trailing part after the last dollar sign in the middle
    */
   @scala.annotation.tailrec
-  private def stripDollars(s: String): String = {
+  def stripDollars(s: String): String = {
     val lastDollarIndex = s.lastIndexOf('$')
     if (lastDollarIndex < s.length - 1) {
       // The last char is not a dollar sign
@@ -3272,6 +3297,24 @@ private[spark] object Utils extends Logging {
         math.max((sortedSize(len / 2) + sortedSize(len / 2 - 1)) / 2, 1)
       case _ => math.max(sortedSize(len / 2), 1)
     }
+  }
+
+  /**
+   * Return whether we are using G1GC or not
+   */
+  lazy val isG1GC: Boolean = {
+    Try {
+      val clazz = Utils.classForName("com.sun.management.HotSpotDiagnosticMXBean")
+        .asInstanceOf[Class[_ <: PlatformManagedObject]]
+      val vmOptionClazz = Utils.classForName("com.sun.management.VMOption")
+      val hotSpotDiagnosticMXBean = ManagementFactory.getPlatformMXBean(clazz)
+      val vmOptionMethod = clazz.getMethod("getVMOption", classOf[String])
+      val valueMethod = vmOptionClazz.getMethod("getValue")
+
+      val useG1GCObject = vmOptionMethod.invoke(hotSpotDiagnosticMXBean, "UseG1GC")
+      val useG1GC = valueMethod.invoke(useG1GCObject).asInstanceOf[String]
+      "true".equals(useG1GC)
+    }.getOrElse(false)
   }
 }
 

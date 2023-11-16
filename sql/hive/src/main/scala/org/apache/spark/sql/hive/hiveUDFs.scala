@@ -54,6 +54,9 @@ private[hive] case class HiveSimpleUDF(
 
   override lazy val deterministic: Boolean = isUDFDeterministic && children.forall(_.deterministic)
 
+  // It's stateful because `evaluator.inputs` is stateful.
+  override def stateful: Boolean = true
+
   override def nullable: Boolean = true
 
   @transient
@@ -135,6 +138,9 @@ private[hive] case class HiveGenericUDF(
   with CodegenFallback
   with Logging
   with UserDefinedExpression {
+
+  // It's stateful because `evaluator.deferredObjects` is stateful.
+  override def stateful: Boolean = true
 
   override def nullable: Boolean = true
 
@@ -237,7 +243,7 @@ private[hive] case class HiveGenericUDTF(
   override lazy val elementSchema = StructType(outputInspector.getAllStructFieldRefs.asScala.map {
     field => StructField(field.getFieldName, inspectorToDataType(field.getFieldObjectInspector),
       nullable = true)
-  }.toSeq)
+  }.toArray)
 
   @transient
   private lazy val inputDataTypes: Array[DataType] = children.map(_.dataType).toArray
@@ -248,11 +254,11 @@ private[hive] case class HiveGenericUDTF(
   @transient
   private lazy val unwrapper = unwrapperFor(outputInspector)
 
+  @transient
+  private lazy val inputProjection = new InterpretedProjection(children)
+
   override def eval(input: InternalRow): TraversableOnce[InternalRow] = {
     outputInspector // Make sure initialized.
-
-    val inputProjection = new InterpretedProjection(children)
-
     function.process(wrap(inputProjection(input), wrappers, udtInput, inputDataTypes))
     collector.collectRows()
   }

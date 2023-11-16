@@ -7,19 +7,19 @@
          :  +- * BroadcastHashJoin LeftSemi BuildRight (27)
          :     :- * Filter (3)
          :     :  +- * ColumnarToRow (2)
-         :     :     +- Scan parquet default.supplier (1)
+         :     :     +- Scan parquet spark_catalog.default.supplier (1)
          :     +- BroadcastExchange (26)
          :        +- * Project (25)
          :           +- * BroadcastHashJoin Inner BuildRight (24)
          :              :- * BroadcastHashJoin LeftSemi BuildRight (12)
          :              :  :- * Filter (6)
          :              :  :  +- * ColumnarToRow (5)
-         :              :  :     +- Scan parquet default.partsupp (4)
+         :              :  :     +- Scan parquet spark_catalog.default.partsupp (4)
          :              :  +- BroadcastExchange (11)
          :              :     +- * Project (10)
          :              :        +- * Filter (9)
          :              :           +- * ColumnarToRow (8)
-         :              :              +- Scan parquet default.part (7)
+         :              :              +- Scan parquet spark_catalog.default.part (7)
          :              +- BroadcastExchange (23)
          :                 +- * Filter (22)
          :                    +- * HashAggregate (21)
@@ -29,16 +29,16 @@
          :                                :- * Project (16)
          :                                :  +- * Filter (15)
          :                                :     +- * ColumnarToRow (14)
-         :                                :        +- Scan parquet default.lineitem (13)
+         :                                :        +- Scan parquet spark_catalog.default.lineitem (13)
          :                                +- ReusedExchange (17)
          +- BroadcastExchange (33)
             +- * Project (32)
                +- * Filter (31)
                   +- * ColumnarToRow (30)
-                     +- Scan parquet default.nation (29)
+                     +- Scan parquet spark_catalog.default.nation (29)
 
 
-(1) Scan parquet default.supplier
+(1) Scan parquet spark_catalog.default.supplier
 Output [4]: [s_suppkey#1, s_name#2, s_address#3, s_nationkey#4]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/supplier]
@@ -52,7 +52,7 @@ Input [4]: [s_suppkey#1, s_name#2, s_address#3, s_nationkey#4]
 Input [4]: [s_suppkey#1, s_name#2, s_address#3, s_nationkey#4]
 Condition : isnotnull(s_nationkey#4)
 
-(4) Scan parquet default.partsupp
+(4) Scan parquet spark_catalog.default.partsupp
 Output [3]: [ps_partkey#5, ps_suppkey#6, ps_availqty#7]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/partsupp]
@@ -66,7 +66,7 @@ Input [3]: [ps_partkey#5, ps_suppkey#6, ps_availqty#7]
 Input [3]: [ps_partkey#5, ps_suppkey#6, ps_availqty#7]
 Condition : ((isnotnull(ps_availqty#7) AND isnotnull(ps_partkey#5)) AND isnotnull(ps_suppkey#6))
 
-(7) Scan parquet default.part
+(7) Scan parquet spark_catalog.default.part
 Output [2]: [p_partkey#8, p_name#9]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/part]
@@ -91,9 +91,10 @@ Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),false), [pla
 (12) BroadcastHashJoin [codegen id : 5]
 Left keys [1]: [ps_partkey#5]
 Right keys [1]: [p_partkey#8]
+Join type: LeftSemi
 Join condition: None
 
-(13) Scan parquet default.lineitem
+(13) Scan parquet spark_catalog.default.lineitem
 Output [4]: [l_partkey#10, l_suppkey#11, l_quantity#12, l_shipdate#13]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/lineitem]
@@ -117,6 +118,7 @@ Output [1]: [p_partkey#8]
 (18) BroadcastHashJoin [codegen id : 3]
 Left keys [1]: [l_partkey#10]
 Right keys [1]: [p_partkey#8]
+Join type: LeftSemi
 Join condition: None
 
 (19) HashAggregate [codegen id : 3]
@@ -135,7 +137,7 @@ Input [4]: [l_partkey#10, l_suppkey#11, sum#16, isEmpty#17]
 Keys [2]: [l_partkey#10, l_suppkey#11]
 Functions [1]: [sum(l_quantity#12)]
 Aggregate Attributes [1]: [sum(l_quantity#12)#18]
-Results [3]: [CheckOverflow((0.5 * promote_precision(cast(sum(l_quantity#12)#18 as decimal(21,1)))), DecimalType(22,1)) AS (0.5 * sum(l_quantity))#19, l_partkey#10, l_suppkey#11]
+Results [3]: [(0.5 * sum(l_quantity#12)#18) AS (0.5 * sum(l_quantity))#19, l_partkey#10, l_suppkey#11]
 
 (22) Filter [codegen id : 4]
 Input [3]: [(0.5 * sum(l_quantity))#19, l_partkey#10, l_suppkey#11]
@@ -148,6 +150,7 @@ Arguments: HashedRelationBroadcastMode(List(input[1, bigint, true], input[2, big
 (24) BroadcastHashJoin [codegen id : 5]
 Left keys [2]: [ps_partkey#5, ps_suppkey#6]
 Right keys [2]: [l_partkey#10, l_suppkey#11]
+Join type: Inner
 Join condition: (cast(ps_availqty#7 as decimal(22,1)) > (0.5 * sum(l_quantity))#19)
 
 (25) Project [codegen id : 5]
@@ -161,13 +164,14 @@ Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),false), [pla
 (27) BroadcastHashJoin [codegen id : 7]
 Left keys [1]: [s_suppkey#1]
 Right keys [1]: [ps_suppkey#6]
+Join type: LeftSemi
 Join condition: None
 
 (28) Project [codegen id : 7]
 Output [3]: [s_name#2, s_address#3, s_nationkey#4]
 Input [4]: [s_suppkey#1, s_name#2, s_address#3, s_nationkey#4]
 
-(29) Scan parquet default.nation
+(29) Scan parquet spark_catalog.default.nation
 Output [2]: [n_nationkey#20, n_name#21]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/nation]
@@ -192,6 +196,7 @@ Arguments: HashedRelationBroadcastMode(List(input[0, bigint, true]),false), [pla
 (34) BroadcastHashJoin [codegen id : 7]
 Left keys [1]: [s_nationkey#4]
 Right keys [1]: [n_nationkey#20]
+Join type: Inner
 Join condition: None
 
 (35) Project [codegen id : 7]

@@ -36,7 +36,7 @@ _DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # Preserve the calling directory
 _CALLING_DIR="$(pwd)"
 # Options used during compilation
-_COMPILE_JVM_OPTS="-Xmx2g -XX:ReservedCodeCacheSize=1g -Xss128m"
+_COMPILE_JVM_OPTS="-Xss128m -Xmx4g -XX:ReservedCodeCacheSize=128m"
 
 # Installs any application tarball given a URL, the expected tarball name,
 # and, optionally, a checkable binary path to determine if the binary has
@@ -119,7 +119,7 @@ install_mvn() {
   if [ "$MVN_BIN" ]; then
     local MVN_DETECTED_VERSION="$(mvn --version | head -n1 | awk '{print $3}')"
   fi
-  if [ $(version $MVN_DETECTED_VERSION) -lt $(version $MVN_VERSION) ]; then
+  if [ $(version $MVN_DETECTED_VERSION) -ne $(version $MVN_VERSION) ]; then
     local MVN_TARBALL="apache-maven-${MVN_VERSION}-bin.tar.gz"
     local FILE_PATH="maven/maven-3/${MVN_VERSION}/binaries/${MVN_TARBALL}"
     local APACHE_MIRROR=${APACHE_MIRROR:-'https://www.apache.org/dyn/closer.lua'}
@@ -179,6 +179,13 @@ cd "${_CALLING_DIR}"
 export MAVEN_OPTS=${MAVEN_OPTS:-"$_COMPILE_JVM_OPTS"}
 
 echo "Using \`mvn\` from path: $MVN_BIN" 1>&2
+
+if [ ! -z "${SPARK_LOCAL_HOSTNAME}" ]; then
+  echo "Using SPARK_LOCAL_HOSTNAME=$SPARK_LOCAL_HOSTNAME" 1>&2
+fi
+if [ ! -z "${SPARK_LOCAL_IP}" ]; then
+  echo "Using SPARK_LOCAL_IP=$SPARK_LOCAL_IP" 1>&2
+fi
 
 # call the `mvn` command as usual
 # SPARK-25854

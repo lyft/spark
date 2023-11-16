@@ -23,10 +23,9 @@ import org.apache.spark.sql.catalyst.optimizer._
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.connector.catalog.CatalogManager
-import org.apache.spark.sql.execution.datasources.PruneFileSourcePartitions
-import org.apache.spark.sql.execution.datasources.SchemaPruning
-import org.apache.spark.sql.execution.datasources.v2.{GroupBasedRowLevelOperationScanPlanning, OptimizeMetadataOnlyDeleteFromTable, V2ScanPartitioning, V2ScanRelationPushDown, V2Writes}
-import org.apache.spark.sql.execution.dynamicpruning.{CleanupDynamicPruningFilters, PartitionPruning}
+import org.apache.spark.sql.execution.datasources.{PruneFileSourcePartitions, SchemaPruning, V1Writes}
+import org.apache.spark.sql.execution.datasources.v2.{GroupBasedRowLevelOperationScanPlanning, OptimizeMetadataOnlyDeleteFromTable, V2ScanPartitioningAndOrdering, V2ScanRelationPushDown, V2Writes}
+import org.apache.spark.sql.execution.dynamicpruning.{CleanupDynamicPruningFilters, PartitionPruning, RowLevelOperationRuntimeGroupFiltering}
 import org.apache.spark.sql.execution.python.{ExtractGroupingPythonUDFFromAggregate, ExtractPythonUDFFromAggregate, ExtractPythonUDFs}
 
 class SparkOptimizer(
@@ -39,8 +38,9 @@ class SparkOptimizer(
     // TODO: move SchemaPruning into catalyst
     Seq(SchemaPruning) :+
       GroupBasedRowLevelOperationScanPlanning :+
+      V1Writes :+
       V2ScanRelationPushDown :+
-      V2ScanPartitioning :+
+      V2ScanPartitioningAndOrdering :+
       V2Writes :+
       PruneFileSourcePartitions
 
@@ -50,12 +50,16 @@ class SparkOptimizer(
   override def defaultBatches: Seq[Batch] = (preOptimizationBatches ++ super.defaultBatches :+
     Batch("Optimize Metadata Only Query", Once, OptimizeMetadataOnlyQuery(catalog)) :+
     Batch("PartitionPruning", Once,
-      PartitionPruning) :+
+      PartitionPruning,
+      // We can't run `OptimizeSubqueries` in this batch, as it will optimize the subqueries
+      // twice which may break some optimizer rules that can only be applied once. The rule below
+      // only invokes `OptimizeSubqueries` to optimize newly added subqueries.
+      new RowLevelOperationRuntimeGroupFiltering(OptimizeSubqueries)) :+
     Batch("InjectRuntimeFilter", FixedPoint(1),
-      InjectRuntimeFilter,
-      RewritePredicateSubquery) :+
+      InjectRuntimeFilter) :+
     Batch("MergeScalarSubqueries", Once,
-      MergeScalarSubqueries) :+
+      MergeScalarSubqueries,
+      RewriteDistinctAggregates) :+
     Batch("Pushdown Filters from PartitionPruning", fixedPoint,
       PushDownPredicates) :+
     Batch("Cleanup filters that cannot be pushed down", Once,
@@ -76,7 +80,9 @@ class SparkOptimizer(
       // The eval-python node may be between Project/Filter and the scan node, which breaks
       // column pruning and filter push-down. Here we rerun the related optimizer rules.
       ColumnPruning,
+      LimitPushDown,
       PushPredicateThroughNonJoin,
+      PushProjectionThroughLimit,
       RemoveNoopOperators) :+
     Batch("User Provided Optimizers", fixedPoint, experimentalMethods.extraOptimizations: _*) :+
     Batch("Replace CTE with Repartition", Once, ReplaceCTERefWithRepartition)
@@ -87,7 +93,7 @@ class SparkOptimizer(
     ExtractPythonUDFs.ruleName :+
     GroupBasedRowLevelOperationScanPlanning.ruleName :+
     V2ScanRelationPushDown.ruleName :+
-    V2ScanPartitioning.ruleName :+
+    V2ScanPartitioningAndOrdering.ruleName :+
     V2Writes.ruleName :+
     ReplaceCTERefWithRepartition.ruleName
 

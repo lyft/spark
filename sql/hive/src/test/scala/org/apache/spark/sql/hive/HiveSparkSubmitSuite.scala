@@ -64,6 +64,7 @@ class HiveSparkSubmitSuite
 
   override def beforeEach(): Unit = {
     super.beforeEach()
+    System.gc()
   }
 
   test("temporary Hive UDF: define a UDF and use it") {

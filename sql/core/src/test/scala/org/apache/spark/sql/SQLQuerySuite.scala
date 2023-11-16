@@ -28,14 +28,14 @@ import scala.collection.mutable
 
 import org.apache.commons.io.FileUtils
 
-import org.apache.spark.{AccumulatorSuite, SparkException}
+import org.apache.spark.{AccumulatorSuite, SPARK_DOC_ROOT, SparkException}
 import org.apache.spark.scheduler.{SparkListener, SparkListenerJobStart}
-import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
 import org.apache.spark.sql.catalyst.expressions.{GenericRow, Hex}
+import org.apache.spark.sql.catalyst.expressions.Cast._
 import org.apache.spark.sql.catalyst.expressions.aggregate.{Complete, Partial}
 import org.apache.spark.sql.catalyst.optimizer.{ConvertToLocalRelation, NestedColumnAliasingSuite}
 import org.apache.spark.sql.catalyst.plans.logical.{LocalLimit, Project, RepartitionByExpression, Sort}
-import org.apache.spark.sql.catalyst.util.StringUtils
+import org.apache.spark.sql.connector.catalog.CatalogManager.SESSION_CATALOG_NAME
 import org.apache.spark.sql.execution.{CommandResultExec, UnionExec}
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
 import org.apache.spark.sql.execution.aggregate._
@@ -78,42 +78,6 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     }
   }
 
-  test("show functions") {
-    def getFunctions(pattern: String): Seq[Row] = {
-      StringUtils.filterPattern(
-        spark.sessionState.catalog.listFunctions("default").map(_._1.funcName)
-        ++ FunctionRegistry.builtinOperators.keys, pattern)
-        .map(Row(_))
-    }
-
-    def createFunction(names: Seq[String]): Unit = {
-      names.foreach { name =>
-        spark.udf.register(name, (arg1: Int, arg2: String) => arg2 + arg1)
-      }
-    }
-
-    def dropFunction(names: Seq[String]): Unit = {
-      names.foreach { name =>
-        spark.sessionState.catalog.dropTempFunction(name, false)
-      }
-    }
-
-    val functions = Array("ilog", "logi", "logii", "logiii", "crc32i", "cubei", "cume_disti",
-      "isize", "ispace", "to_datei", "date_addi", "current_datei")
-
-    createFunction(functions)
-
-    checkAnswer(sql("SHOW functions"), getFunctions("*"))
-    assert(sql("SHOW functions").collect().size > 200)
-
-    Seq("^c*", "*e$", "log*", "*date*").foreach { pattern =>
-      // For the pattern part, only '*' and '|' are allowed as wildcards.
-      // For '*', we need to replace it to '.*'.
-      checkAnswer(sql(s"SHOW FUNCTIONS '$pattern'"), getFunctions(pattern))
-    }
-    dropFunction(functions)
-  }
-
   test("describe functions") {
     checkKeywordsExist(sql("describe function extended upper"),
       "Function: upper",
@@ -131,9 +95,17 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
 
     checkKeywordsNotExist(sql("describe functioN Upper"), "Extended Usage")
 
-    val e = intercept[AnalysisException](sql("describe functioN abcadf"))
-    assert(e.message.contains("Undefined function: abcadf. This function is neither a " +
-      "built-in/temporary function, nor a persistent function"))
+    val sqlText = "describe functioN abcadf"
+    checkError(
+      exception = intercept[AnalysisException](sql(sqlText)),
+      errorClass = "UNRESOLVED_ROUTINE",
+      parameters = Map(
+        "routineName" -> "`abcadf`",
+        "searchPath" -> "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"),
+      context = ExpectedContext(
+        fragment = sqlText,
+        start = 0,
+        stop = 23))
   }
 
   test("SPARK-34678: describe functions for table-valued functions") {
@@ -306,6 +278,14 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
       sql("select sum(a), avg(a) from allNulls"),
       Seq(Row(null, null))
     )
+  }
+
+  test("SPARK-43522: Fix creating struct column name with index of array") {
+    val df = Seq("a=b,c=d,d=f").toDF.withColumn("key_value", split('value, ","))
+      .withColumn("map_entry", transform(col("key_value"), x => struct(split(x, "=")
+        .getItem(0), split(x, "=").getItem(1)))).select("map_entry")
+
+    checkAnswer(df, Row(Seq(Row("a", "b"), Row("c", "d"), Row("d", "f"))))
   }
 
   private def testCodeGen(sqlText: String, expectedResults: Seq[Row]): Unit = {
@@ -1116,31 +1096,6 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     )
   }
 
-  test("SPARK-17863: SELECT distinct does not work correctly if order by missing attribute") {
-    checkAnswer(
-      sql("""select distinct struct.a, struct.b
-          |from (
-          |  select named_struct('a', 1, 'b', 2, 'c', 3) as struct
-          |  union all
-          |  select named_struct('a', 1, 'b', 2, 'c', 4) as struct) tmp
-          |order by a, b
-          |""".stripMargin),
-      Row(1, 2) :: Nil)
-
-    val error = intercept[AnalysisException] {
-      sql("""select distinct struct.a, struct.b
-            |from (
-            |  select named_struct('a', 1, 'b', 2, 'c', 3) as struct
-            |  union all
-            |  select named_struct('a', 1, 'b', 2, 'c', 4) as struct) tmp
-            |order by struct.a, struct.b
-            |""".stripMargin)
-    }
-    assert(error.getErrorClass == "MISSING_COLUMN")
-    assert(error.messageParameters.sameElements(Array("struct.a", "a, b")))
-
-  }
-
   test("cast boolean to string") {
     // TODO Ensure true/false string letter casing is consistent with Hive in all cases.
     checkAnswer(
@@ -1678,12 +1633,14 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     var e = intercept[AnalysisException] {
       sql("select * from in_valid_table")
     }
-    assert(e.message.contains("Table or view not found"))
+    checkErrorTableNotFound(e, "`in_valid_table`",
+      ExpectedContext("in_valid_table", 14, 13 + "in_valid_table".length))
 
     e = intercept[AnalysisException] {
       sql("select * from no_db.no_table").show()
     }
-    assert(e.message.contains("Table or view not found"))
+    checkErrorTableNotFound(e, "`no_db`.`no_table`",
+      ExpectedContext("no_db.no_table", 14, 13 + "no_db.no_table".length))
 
     e = intercept[AnalysisException] {
       sql("select * from json.invalid_file")
@@ -1698,8 +1655,10 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     e = intercept[AnalysisException] {
       sql(s"select id from `org.apache.spark.sql.sources.HadoopFsRelationProvider`.`file_path`")
     }
-    assert(e.message.contains("Table or view not found: " +
-      "`org.apache.spark.sql.sources.HadoopFsRelationProvider`.file_path"))
+    checkErrorTableNotFound(e,
+      "`org.apache.spark.sql.sources.HadoopFsRelationProvider`.`file_path`",
+    ExpectedContext("`org.apache.spark.sql.sources.HadoopFsRelationProvider`.`file_path`", 15,
+      14 + "`org.apache.spark.sql.sources.HadoopFsRelationProvider`.`file_path`".length))
 
     e = intercept[AnalysisException] {
       sql(s"select id from `Jdbc`.`file_path`")
@@ -1851,8 +1810,13 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
           nestedStructData.select($"record.r1.*"))
 
         // Try resolving something not there.
-        assert(intercept[AnalysisException](sql("SELECT abc.* FROM nestedStructTable"))
-          .getMessage.contains("cannot resolve"))
+        checkError(
+          exception = intercept[AnalysisException]{
+            sql("SELECT abc.* FROM nestedStructTable")
+          },
+          errorClass = "_LEGACY_ERROR_TEMP_1051",
+          parameters = Map("targetString" -> "abc", "columns" -> "record"),
+          context = ExpectedContext(fragment = "abc.*", start = 7, stop = 11))
       }
 
       // Create paths with unusual characters
@@ -1881,8 +1845,15 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
       }
 
       // Try star expanding a scalar. This should fail.
-      assert(intercept[AnalysisException](sql("select a.* from testData2")).getMessage.contains(
-        "Can only star expand struct data types."))
+      checkError(
+        exception = intercept[AnalysisException]{
+          sql("select a.* from testData2")
+        },
+        errorClass = "_LEGACY_ERROR_TEMP_1050",
+        sqlState = None,
+        parameters = Map("attributes" -> "(ArrayBuffer|List)\\(a\\)"),
+        matchPVals = true,
+        queryContext = Array(ExpectedContext(fragment = "a.*", start = 7, stop = 9)))
     }
   }
 
@@ -1928,15 +1899,20 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
         dfNoCols,
         dfNoCols.select($"*"))
 
-      var e = intercept[AnalysisException] {
-        sql("SELECT a.* FROM temp_table_no_cols a")
-      }.getMessage
-      assert(e.contains("cannot resolve 'a.*' given input columns ''"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          sql("SELECT a.* FROM temp_table_no_cols a")
+        },
+        errorClass = "_LEGACY_ERROR_TEMP_1051",
+        parameters = Map("targetString" -> "a", "columns" -> ""),
+        context = ExpectedContext(fragment = "a.*", start = 7, stop = 9))
 
-      e = intercept[AnalysisException] {
-        dfNoCols.select($"b.*")
-      }.getMessage
-      assert(e.contains("cannot resolve 'b.*' given input columns ''"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          dfNoCols.select($"b.*")
+        },
+        errorClass = "_LEGACY_ERROR_TEMP_1051",
+        parameters = Map("targetString" -> "b", "columns" -> ""))
     }
   }
 
@@ -1985,7 +1961,7 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
         x
       })
       verifyCallCount(
-        df.groupBy().agg(sum(testUdf($"b") + testUdf($"b") + testUdf($"b"))), Row(3.0), 1)
+        df.agg(sum(testUdf($"b") + testUdf($"b") + testUdf($"b"))), Row(3.0), 1)
 
       verifyCallCount(
         df.selectExpr("testUdf(a + 1) + testUdf(1 + a)", "testUdf(a + 1)"), Row(4, 2), 1)
@@ -2151,7 +2127,7 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
   }
 
   test("SPARK-15327: fail to compile generated code with complex data structure") {
-    withTempDir{ dir =>
+    withTempDir { dir =>
       val json =
         """
           |{"h": {"b": {"c": [{"e": "adfgd"}], "a": [{"e": "testing", "count": 3}],
@@ -2573,17 +2549,17 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
       val originalValue = newSession.sessionState.conf.runSQLonFile
 
       try {
-        newSession.sessionState.conf.setConf(SQLConf.RUN_SQL_ON_FILES, false)
+        newSession.conf.set(SQLConf.RUN_SQL_ON_FILES, false)
         intercept[AnalysisException] {
           newSession.sql(s"SELECT i, j FROM parquet.`${path.getCanonicalPath}`")
         }
 
-        newSession.sessionState.conf.setConf(SQLConf.RUN_SQL_ON_FILES, true)
+        newSession.conf.set(SQLConf.RUN_SQL_ON_FILES, true)
         checkAnswer(
           newSession.sql(s"SELECT i, j FROM parquet.`${path.getCanonicalPath}`"),
           Row(1, "a"))
       } finally {
-        newSession.sessionState.conf.setConf(SQLConf.RUN_SQL_ON_FILES, originalValue)
+        newSession.conf.set(SQLConf.RUN_SQL_ON_FILES, originalValue)
       }
     }
   }
@@ -2670,8 +2646,23 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
   }
 
   test("RuntimeReplaceable functions should not take extra parameters") {
-    val e = intercept[AnalysisException](sql("SELECT nvl(1, 2, 3)"))
-    assert(e.message.contains("Invalid number of arguments"))
+    checkError(
+      exception = intercept[AnalysisException] {
+        sql("SELECT nvl(1, 2, 3)")
+      },
+      errorClass = "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+      parameters = Map(
+        "functionName" -> toSQLId("nvl"),
+        "expectedNum" -> "2",
+        "actualNum" -> "3",
+        "docroot" -> SPARK_DOC_ROOT
+      ),
+      context = ExpectedContext(
+        start = 7,
+        stop = 18,
+        fragment = "nvl(1, 2, 3)"
+      )
+    )
   }
 
   test("SPARK-21228: InSet incorrect handling of structs") {
@@ -2716,36 +2707,45 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
       checkAnswer(sql("SELECT struct(1 a) UNION ALL (SELECT struct(2 A))"),
         Row(Row(1)) :: Row(Row(2)) :: Nil)
 
-      val m2 = intercept[AnalysisException] {
-        sql("SELECT struct(1 a) EXCEPT (SELECT struct(2 A))")
-      }.message
-      assert(m2.contains("Except can only be performed on tables with the compatible column types"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          sql("SELECT struct(1 a) EXCEPT (SELECT struct(2 A))")
+        },
+        errorClass = "INCOMPATIBLE_COLUMN_TYPE",
+        parameters = Map(
+          "tableOrdinalNumber" -> "second",
+          "columnOrdinalNumber" -> "first",
+          "dataType2" -> "\"STRUCT<a: INT>\"",
+          "operator" -> "EXCEPT",
+          "hint" -> "",
+          "dataType1" -> "\"STRUCT<A: INT>\""),
+        context = ExpectedContext(
+          fragment = "SELECT struct(1 a) EXCEPT (SELECT struct(2 A))",
+          start = 0,
+          stop = 45)
+      )
 
       withTable("t", "S") {
         sql("CREATE TABLE t(c struct<f:int>) USING parquet")
         sql("CREATE TABLE S(C struct<F:int>) USING parquet")
         checkAnswer(sql("SELECT * FROM t, S WHERE t.c.f = S.C.F"), Seq.empty)
-        val m = intercept[AnalysisException] {
-          sql("SELECT * FROM t, S WHERE c = C")
-        }.message
-        assert(
-          m.contains(
-            "cannot resolve '(spark_catalog.default.t.c = " +
-            "spark_catalog.default.S.C)' due to data type mismatch"))
+        val query = "SELECT * FROM t, S WHERE c = C"
+        checkError(
+          exception = intercept[AnalysisException] {
+            sql(query)
+          },
+          errorClass = "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+          sqlState = None,
+          parameters = Map(
+            "sqlExpr" -> "\"(c = C)\"",
+            "left" -> "\"STRUCT<f: INT>\"",
+            "right" -> "\"STRUCT<F: INT>\""),
+          context = ExpectedContext(
+            fragment = "c = C",
+            start = 25,
+            stop = 29
+          ))
       }
-    }
-  }
-
-  test("SPARK-21335: support un-aliased subquery") {
-    withTempView("v") {
-      Seq(1 -> "a").toDF("i", "j").createOrReplaceTempView("v")
-      checkAnswer(sql("SELECT i from (SELECT i FROM v)"), Row(1))
-
-      val e = intercept[AnalysisException](sql("SELECT v.i from (SELECT i FROM v)"))
-      assert(e.getErrorClass == "MISSING_COLUMN")
-      assert(e.messageParameters.sameElements(Array("v.i", "__auto_generated_subquery_name.i")))
-
-      checkAnswer(sql("SELECT __auto_generated_subquery_name.i from (SELECT i FROM v)"), Row(1))
     }
   }
 
@@ -3039,13 +3039,19 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
 
   test("SPARK-26402: accessing nested fields with different cases in case insensitive mode") {
     withSQLConf(SQLConf.CASE_SENSITIVE.key -> "true") {
-      val msg = intercept[AnalysisException] {
-        withTable("t") {
-          sql("create table t (s struct<i: Int>) using json")
-          checkAnswer(sql("select s.I from t group by s.i"), Nil)
-        }
-      }.message
-      assert(msg.contains("No such struct field I in i"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          withTable("t") {
+            sql("create table t (s struct<i: Int>) using json")
+            checkAnswer(sql("select s.I from t group by s.i"), Nil)
+          }
+        },
+        errorClass = "FIELD_NOT_FOUND",
+        parameters = Map("fieldName" -> "`I`", "fields" -> "`i`"),
+        context = ExpectedContext(
+          fragment = "s.I",
+          start = 7,
+          stop = 9))
     }
 
     withSQLConf(SQLConf.CASE_SENSITIVE.key -> "false") {
@@ -3074,7 +3080,8 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     }
 
     Seq("orc", "parquet").foreach { format =>
-      withSQLConf(SQLConf.USE_V1_SOURCE_LIST.key -> "") {
+      withSQLConf(SQLConf.USE_V1_SOURCE_LIST.key -> "",
+        SQLConf.PARQUET_FILTER_PUSHDOWN_STRING_PREDICATE_ENABLED.key -> "false") {
         withTempPath { dir =>
           spark.range(10).map(i => (i, i.toString)).toDF("id", "s")
             .write
@@ -3083,17 +3090,17 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
           val df = spark.read.format(format).load(dir.getCanonicalPath)
           checkPushedFilters(
             format,
-            df.where((Symbol("id") < 2 and Symbol("s").contains("foo")) or
-              (Symbol("id") > 10 and Symbol("s").contains("bar"))),
+            df.where(($"id" < 2 and $"s".contains("foo")) or
+              ($"id" > 10 and $"s".contains("bar"))),
             Array(sources.Or(sources.LessThan("id", 2), sources.GreaterThan("id", 10))))
           checkPushedFilters(
             format,
-            df.where(Symbol("s").contains("foo") or
-              (Symbol("id") > 10 and Symbol("s").contains("bar"))),
+            df.where($"s".contains("foo") or
+              ($"id" > 10 and $"s".contains("bar"))),
             Array.empty)
           checkPushedFilters(
             format,
-            df.where(Symbol("id") < 2 and not(Symbol("id") > 10 and Symbol("s").contains("bar"))),
+            df.where($"id" < 2 and not($"id" > 10 and $"s".contains("bar"))),
             Array(sources.IsNotNull("id"), sources.LessThan("id", 2)))
         }
       }
@@ -3434,20 +3441,10 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
 
       withSQLConf(SQLConf.LEGACY_INTEGER_GROUPING_ID.key -> "true") {
         testGroupingIDs(32, Seq(0, 1))
-        val ex = intercept[AnalysisException] {
-          testGroupingIDs(33)
-        }
-        assert(ex.getMessage.contains("Grouping sets size cannot be greater than 32"))
-        assert(ex.getErrorClass == "GROUPING_SIZE_LIMIT_EXCEEDED")
       }
 
       withSQLConf(SQLConf.LEGACY_INTEGER_GROUPING_ID.key -> "false") {
         testGroupingIDs(64, Seq(0L, 1L))
-        val ex = intercept[AnalysisException] {
-          testGroupingIDs(65)
-        }
-        assert(ex.getMessage.contains("Grouping sets size cannot be greater than 64"))
-        assert(ex.getErrorClass == "GROUPING_SIZE_LIMIT_EXCEEDED")
       }
     }
   }
@@ -3757,13 +3754,29 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     withTempView("df") {
       Seq("m@ca").toDF("s").createOrReplaceTempView("df")
 
-      val e = intercept[AnalysisException] {
-        sql("SELECT s LIKE 'm%@ca' ESCAPE '%' FROM df").collect()
-      }
-      assert(e.message.contains("the pattern 'm%@ca' is invalid, " +
-        "the escape character is not allowed to precede '@'"))
+      checkError(
+        exception = intercept[AnalysisException] {
+          sql("SELECT s LIKE 'm%@ca' ESCAPE '%' FROM df").collect()
+        },
+        errorClass = "INVALID_FORMAT.ESC_IN_THE_MIDDLE",
+        parameters = Map(
+          "format" -> toSQLValue("m%@ca", StringType),
+          "char" -> toSQLValue("@", StringType)))
 
       checkAnswer(sql("SELECT s LIKE 'm@@ca' ESCAPE '@' FROM df"), Row(true))
+    }
+  }
+
+  test("the escape character is not allowed to end with") {
+    withTempView("df") {
+      Seq("jialiuping").toDF("a").createOrReplaceTempView("df")
+
+      checkError(
+        exception = intercept[AnalysisException] {
+          sql("SELECT a LIKE 'jialiuping%' ESCAPE '%' FROM df").collect()
+        },
+        errorClass = "INVALID_FORMAT.ESC_AT_THE_END",
+        parameters = Map("format" -> toSQLValue("jialiuping%", StringType)))
     }
   }
 
@@ -3858,10 +3871,16 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
           s"default.$functionName" -> false,
           functionName -> true) {
           // create temporary function without class
-          val e = intercept[AnalysisException] {
-            sql(s"CREATE TEMPORARY FUNCTION $functionName AS '$sumFuncClass'")
-          }.getMessage
-          assert(e.contains("Can not load class 'org.apache.spark.examples.sql.Spark33084"))
+          checkError(
+            exception = intercept[AnalysisException] {
+              sql(s"CREATE TEMPORARY FUNCTION $functionName AS '$sumFuncClass'")
+            },
+            errorClass = "CANNOT_LOAD_FUNCTION_CLASS",
+            parameters = Map(
+              "className" -> "org.apache.spark.examples.sql.Spark33084",
+              "functionName" -> "`test_udf`"
+            )
+          )
           sql("ADD JAR ivy://org.apache.spark:SPARK-33084:1.0")
           sql(s"CREATE TEMPORARY FUNCTION $functionName AS '$sumFuncClass'")
           // create a view using a function in 'default' database
@@ -3950,7 +3969,8 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
               |""".stripMargin)
         }
         assert(e.message.contains("Not allowed to create a permanent view " +
-          s"`default`.`$testViewName` by referencing a temporary view $tempViewName"))
+          s"`$SESSION_CATALOG_NAME`.`default`.`$testViewName` by referencing a " +
+          s"temporary view $tempViewName"))
 
         val e2 = intercept[AnalysisException] {
           sql(
@@ -3963,7 +3983,8 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
               |""".stripMargin)
         }
         assert(e2.message.contains("Not allowed to create a permanent view " +
-          s"`default`.`$testViewName` by referencing a temporary function `$tempFuncName`"))
+          s"`$SESSION_CATALOG_NAME`.`default`.`$testViewName` by referencing a " +
+          s"temporary function `$tempFuncName`"))
       }
     }
   }
@@ -4107,6 +4128,36 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
         case r: ReusedExchangeExec => r
       }
       assert(reusedExchanges.size == 1)
+    }
+  }
+
+  test("SPARK-40245: Fix FileScan canonicalization when partition or data filter columns are not " +
+    "read") {
+    withSQLConf(SQLConf.USE_V1_SOURCE_LIST.key -> "") {
+      withTempPath { path =>
+        spark.range(5)
+          .withColumn("p", $"id" % 2)
+          .write
+          .mode("overwrite")
+          .partitionBy("p")
+          .parquet(path.toString)
+        withTempView("t") {
+          spark.read.parquet(path.toString).createOrReplaceTempView("t")
+          val df = sql(
+            """
+              |SELECT t1.id, t2.id, t3.id
+              |FROM t AS t1
+              |JOIN t AS t2 ON t2.id = t1.id
+              |JOIN t AS t3 ON t3.id = t2.id
+              |WHERE t1.p = 1 AND t2.p = 1 AND t3.p = 1
+              |""".stripMargin)
+          df.collect()
+          val reusedExchanges = collect(df.queryExecution.executedPlan) {
+            case r: ReusedExchangeExec => r
+          }
+          assert(reusedExchanges.size == 1)
+        }
+      }
     }
   }
 
@@ -4297,13 +4348,6 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     checkAnswer(sql("""SELECT from_json(R'{"a": "\\"}', 'a string')"""), Row(Row("\\")))
   }
 
-  test("SPARK-36979: Add RewriteLateralSubquery rule into nonExcludableRules") {
-    withSQLConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key ->
-      "org.apache.spark.sql.catalyst.optimizer.RewriteLateralSubquery") {
-      sql("SELECT * FROM testData, LATERAL (SELECT * FROM testData)").collect()
-    }
-  }
-
   test("TABLE SAMPLE") {
     withTable("test") {
       sql("CREATE TABLE test(c int) USING PARQUET")
@@ -4429,25 +4473,6 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     }
   }
 
-  test("SPARK-39177: Query context of getting map value should be serialized to executors" +
-    " when WSCG is off") {
-    withSQLConf(SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> "false",
-      SQLConf.ANSI_ENABLED.key -> "true") {
-      withTable("t") {
-        sql("create table t(m map<string, string>) using parquet")
-        sql("insert into t values map('a', 'b')")
-        Seq(
-          "select m['foo'] from t",
-          "select element_at(m, 'foo') from t").foreach { query =>
-          val msg = intercept[SparkException] {
-            sql(query).collect()
-          }.getMessage
-          assert(msg.contains(query))
-        }
-      }
-    }
-  }
-
   test("SPARK-39190,SPARK-39208,SPARK-39210: Query context of decimal overflow error should " +
     "be serialized to executors when WSCG is off") {
     withSQLConf(SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> "false",
@@ -4529,6 +4554,40 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
       Seq(Row(2), Row(1)))
   }
 
+  test("SPARK-42416: Dateset operations should not resolve the analyzed logical plan again") {
+    withTable("app") {
+      withView("view1") {
+        sql(
+          """
+            |CREATE TABLE app (
+            |  uid STRING,
+            |  st TIMESTAMP,
+            |  ds INT
+            |) USING parquet PARTITIONED BY (ds);
+            |""".stripMargin)
+
+        sql(
+          """
+            |create or replace temporary view view1 as WITH new_app AS (
+            |  SELECT a.* FROM app a)
+            |SELECT
+            |    uid,
+            |    20230208 AS ds
+            |  FROM
+            |    new_app
+            |  GROUP BY
+            |    1,
+            |    2
+            |""".stripMargin)
+        val df = sql("select uid from view1")
+        // If the logical plan in `df` is analyzed again, the 'group by 20230208' will be
+        // treated as ordinal again and there will be an error about GROUP BY position 20230208
+        // being out of range.
+        df.show()
+      }
+    }
+  }
+
   test("SPARK-39548: CreateView will make queries go into inline CTE code path thus" +
     "trigger a mis-clarified `window definition not found` issue") {
     sql(
@@ -4559,9 +4618,24 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
         val msg = intercept[SparkException] {
           sql("select cast(cast(d as int) as long) from dt").collect()
         }.getCause.getMessage
-        assert(msg.contains("The value 9000000000BD of the type \"DECIMAL(10,0)\" " +
-          "cannot be cast to \"INT\" due to an overflow"))
+        assert(msg.contains("[CAST_OVERFLOW]"))
       }
+    }
+  }
+
+  test("SPARK-40903: Don't reorder Add for canonicalize if it is decimal type") {
+    val tableName = "decimalTable"
+    withTable(tableName) {
+      sql(s"create table $tableName(a decimal(12, 5), b decimal(12, 6)) using orc")
+      checkAnswer(sql(s"select sum(coalesce(a + b + 1.75, a)) from $tableName"), Row(null))
+    }
+  }
+
+  test("SPARK-41144: Unresolved hint should not cause query failure") {
+    withTable("t1", "t2") {
+      sql("CREATE TABLE t1(c1 bigint) USING PARQUET")
+      sql("CREATE TABLE t2(c2 bigint) USING PARQUET")
+      sql("SELECT /*+ hash(t2) */ * FROM t1 join t2 on c1 = c2")
     }
   }
 }

@@ -22,7 +22,7 @@ API Reference
 
 This page lists an overview of all public PySpark modules, classes, functions and methods.
 
-Pandas API on Spark follows the API specifications of pandas 1.3.
+Pandas API on Spark follows the API specifications of latest pandas release.
 
 .. toctree::
    :maxdepth: 2
@@ -35,3 +35,4 @@ Pandas API on Spark follows the API specifications of pandas 1.3.
    pyspark.mllib
    pyspark
    pyspark.resource
+   pyspark.errors

@@ -90,6 +90,7 @@ class SQLAppStatusListener(
           // data corresponding to the execId.
           val sqlStoreData = kvstore.read(classOf[SQLExecutionUIData], executionId)
           val executionData = new LiveExecutionData(executionId)
+          executionData.rootExecutionId = sqlStoreData.rootExecutionId
           executionData.description = sqlStoreData.description
           executionData.details = sqlStoreData.details
           executionData.physicalPlanDescription = sqlStoreData.physicalPlanDescription
@@ -220,7 +221,10 @@ class SQLAppStatusListener(
             metricAggregationMap.put(className, method)
             method
           } catch {
-            case NonFatal(_) =>
+            case NonFatal(e) =>
+              logWarning(s"Unable to load custom metric object for class `$className`. " +
+                "Please make sure that the custom metric class is in the classpath and " +
+                "it has 0-arg constructor.", e)
               // Cannot initialize custom metric object, we might be in history server that does
               // not have the custom metric class.
               val defaultMethod = (_: Array[Long], _: Array[Long]) => "N/A"
@@ -319,7 +323,8 @@ class SQLAppStatusListener(
     }
   }
 
-  private def toStoredNodes(nodes: Seq[SparkPlanGraphNode]): Seq[SparkPlanGraphNodeWrapper] = {
+  private def toStoredNodes(
+      nodes: collection.Seq[SparkPlanGraphNode]): collection.Seq[SparkPlanGraphNodeWrapper] = {
     nodes.map {
       case cluster: SparkPlanGraphCluster =>
         val storedCluster = new SparkPlanGraphClusterWrapper(
@@ -336,7 +341,7 @@ class SQLAppStatusListener(
   }
 
   private def onExecutionStart(event: SparkListenerSQLExecutionStart): Unit = {
-    val SparkListenerSQLExecutionStart(executionId, description, details,
+    val SparkListenerSQLExecutionStart(executionId, rootExecutionId, description, details,
       physicalPlanDescription, sparkPlanInfo, time, modifiedConfigs) = event
 
     val planGraph = SparkPlanGraph(sparkPlanInfo)
@@ -351,6 +356,7 @@ class SQLAppStatusListener(
     kvstore.write(graphToStore)
 
     val exec = getOrCreateExecution(executionId)
+    exec.rootExecutionId = rootExecutionId.getOrElse(executionId)
     exec.description = description
     exec.details = details
     exec.physicalPlanDescription = physicalPlanDescription
@@ -390,9 +396,10 @@ class SQLAppStatusListener(
   }
 
   private def onExecutionEnd(event: SparkListenerSQLExecutionEnd): Unit = {
-    val SparkListenerSQLExecutionEnd(executionId, time) = event
+    val SparkListenerSQLExecutionEnd(executionId, time, errorMessage) = event
     Option(liveExecutions.get(executionId)).foreach { exec =>
       exec.completionTime = Some(new Date(time))
+      exec.errorMessage = errorMessage
       update(exec)
 
       // Aggregating metrics can be expensive for large queries, so do it asynchronously. The end
@@ -478,13 +485,15 @@ class SQLAppStatusListener(
 
 private class LiveExecutionData(val executionId: Long) extends LiveEntity {
 
+  var rootExecutionId: Long = _
   var description: String = null
   var details: String = null
   var physicalPlanDescription: String = null
   var modifiedConfigs: Map[String, String] = _
-  var metrics = Seq[SQLPlanMetric]()
+  var metrics = collection.Seq[SQLPlanMetric]()
   var submissionTime = -1L
   var completionTime: Option[Date] = None
+  var errorMessage: Option[String] = None
 
   var jobs = Map[Int, JobExecutionStatus]()
   var stages = Set[Int]()
@@ -499,6 +508,7 @@ private class LiveExecutionData(val executionId: Long) extends LiveEntity {
   override protected def doUpdate(): Any = {
     new SQLExecutionUIData(
       executionId,
+      rootExecutionId,
       description,
       details,
       physicalPlanDescription,
@@ -506,6 +516,7 @@ private class LiveExecutionData(val executionId: Long) extends LiveEntity {
       metrics,
       submissionTime,
       completionTime,
+      errorMessage,
       jobs,
       stages,
       metricsValues)

@@ -21,6 +21,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, ExprCode}
 import org.apache.spark.sql.catalyst.expressions.codegen.Block._
+import org.apache.spark.sql.catalyst.util.TypeUtils
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.apache.spark.util.collection.unsafe.sort.PrefixComparators._
@@ -44,11 +45,11 @@ case object Descending extends SortDirection {
   override def defaultNullOrdering: NullOrdering = NullsLast
 }
 
-case object NullsFirst extends NullOrdering{
+case object NullsFirst extends NullOrdering {
   override def sql: String = "NULLS FIRST"
 }
 
-case object NullsLast extends NullOrdering{
+case object NullsLast extends NullOrdering {
   override def sql: String = "NULLS LAST"
 }
 
@@ -68,13 +69,8 @@ case class SortOrder(
 
   override def children: Seq[Expression] = child +: sameOrderExpressions
 
-  override def checkInputDataTypes(): TypeCheckResult = {
-    if (RowOrdering.isOrderable(dataType)) {
-      TypeCheckResult.TypeCheckSuccess
-    } else {
-      TypeCheckResult.TypeCheckFailure(s"cannot sort data type ${dataType.catalogString}")
-    }
-  }
+  override def checkInputDataTypes(): TypeCheckResult =
+    TypeUtils.checkForOrderingExpr(dataType, prettyName)
 
   override def dataType: DataType = child.dataType
   override def nullable: Boolean = child.nullable

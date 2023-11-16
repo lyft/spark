@@ -16,10 +16,8 @@
  */
 package org.apache.spark.sql.execution.datasources.v2.parquet
 
-import java.net.URI
 import java.time.ZoneId
 
-import org.apache.hadoop.fs.Path
 import org.apache.hadoop.mapred.FileSplit
 import org.apache.hadoop.mapreduce._
 import org.apache.hadoop.mapreduce.task.TaskAttemptContextImpl
@@ -57,7 +55,7 @@ import org.apache.spark.util.SerializableConfiguration
  * @param partitionSchema Schema of partitions.
  * @param filters Filters to be pushed down in the batch scan.
  * @param aggregation Aggregation to be pushed down in the batch scan.
- * @param parquetOptions The options of Parquet datasource that are set for the read.
+ * @param options The options of Parquet datasource that are set for the read.
  */
 case class ParquetPartitionReaderFactory(
     sqlConf: SQLConf,
@@ -67,7 +65,7 @@ case class ParquetPartitionReaderFactory(
     partitionSchema: StructType,
     filters: Array[Filter],
     aggregation: Option[Aggregation],
-    parquetOptions: ParquetOptions) extends FilePartitionReaderFactory with Logging {
+    options: ParquetOptions) extends FilePartitionReaderFactory with Logging {
   private val isCaseSensitive = sqlConf.caseSensitiveAnalysis
   private val resultSchema = StructType(partitionSchema.fields ++ readDataSchema.fields)
   private val enableOffHeapColumnVector = sqlConf.offHeapColumnVectorEnabled
@@ -82,14 +80,14 @@ case class ParquetPartitionReaderFactory(
   private val pushDownDate = sqlConf.parquetFilterPushDownDate
   private val pushDownTimestamp = sqlConf.parquetFilterPushDownTimestamp
   private val pushDownDecimal = sqlConf.parquetFilterPushDownDecimal
-  private val pushDownStringStartWith = sqlConf.parquetFilterPushDownStringStartWith
+  private val pushDownStringPredicate = sqlConf.parquetFilterPushDownStringPredicate
   private val pushDownInFilterThreshold = sqlConf.parquetFilterPushDownInFilterThreshold
-  private val datetimeRebaseModeInRead = parquetOptions.datetimeRebaseModeInRead
-  private val int96RebaseModeInRead = parquetOptions.int96RebaseModeInRead
+  private val datetimeRebaseModeInRead = options.datetimeRebaseModeInRead
+  private val int96RebaseModeInRead = options.int96RebaseModeInRead
 
   private def getFooter(file: PartitionedFile): ParquetMetadata = {
     val conf = broadcastedConf.value.value
-    val filePath = new Path(new URI(file.filePath))
+    val filePath = file.toPath
 
     if (aggregation.isEmpty) {
       ParquetFooterReader.readFooter(conf, filePath, SKIP_ROW_GROUPS)
@@ -132,7 +130,8 @@ case class ParquetPartitionReaderFactory(
           val footer = getFooter(file)
 
           if (footer != null && footer.getBlocks.size > 0) {
-            ParquetUtils.createAggInternalRowFromFooter(footer, file.filePath, dataSchema,
+            ParquetUtils.createAggInternalRowFromFooter(footer, file.urlEncodedPath,
+              dataSchema,
               partitionSchema, aggregation.get, readDataSchema, file.partitionValues,
               getDatetimeRebaseSpec(footer.getFileMetaData))
           } else {
@@ -175,7 +174,7 @@ case class ParquetPartitionReaderFactory(
         private val batch: ColumnarBatch = {
           val footer = getFooter(file)
           if (footer != null && footer.getBlocks.size > 0) {
-            val row = ParquetUtils.createAggInternalRowFromFooter(footer, file.filePath,
+            val row = ParquetUtils.createAggInternalRowFromFooter(footer, file.urlEncodedPath,
               dataSchema, partitionSchema, aggregation.get, readDataSchema, file.partitionValues,
               getDatetimeRebaseSpec(footer.getFileMetaData))
             AggregatePushDownUtils.convertAggregatesRowToBatch(
@@ -209,7 +208,7 @@ case class ParquetPartitionReaderFactory(
           RebaseSpec) => RecordReader[Void, T]): RecordReader[Void, T] = {
     val conf = broadcastedConf.value.value
 
-    val filePath = new Path(new URI(file.filePath))
+    val filePath = file.toPath
     val split = new FileSplit(filePath, file.start, file.length, Array.empty[String])
 
     lazy val footerFileMetaData = getFooter(file).getFileMetaData
@@ -222,7 +221,7 @@ case class ParquetPartitionReaderFactory(
         pushDownDate,
         pushDownTimestamp,
         pushDownDecimal,
-        pushDownStringStartWith,
+        pushDownStringPredicate,
         pushDownInFilterThreshold,
         isCaseSensitive,
         datetimeRebaseSpec)
@@ -295,10 +294,12 @@ case class ParquetPartitionReaderFactory(
     } else {
       new ParquetRecordReader[InternalRow](readSupport)
     }
-    val iter = new RecordReaderIterator(reader)
+    val readerWithRowIndexes = ParquetRowIndexUtil.addRowIndexToRecordReaderIfNeeded(
+      reader, readDataSchema)
+    val iter = new RecordReaderIterator(readerWithRowIndexes)
     // SPARK-23457 Register a task completion listener before `initialization`.
     taskContext.foreach(_.addTaskCompletionListener[Unit](_ => iter.close()))
-    reader
+    readerWithRowIndexes
   }
 
   private def createVectorizedReader(file: PartitionedFile): VectorizedParquetRecordReader = {

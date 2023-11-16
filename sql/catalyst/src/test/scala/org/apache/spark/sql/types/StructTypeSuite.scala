@@ -22,12 +22,14 @@ import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.analysis.{caseInsensitiveResolution, caseSensitiveResolution}
 import org.apache.spark.sql.catalyst.parser.ParseException
 import org.apache.spark.sql.catalyst.plans.SQLHelper
+import org.apache.spark.sql.catalyst.util.ResolveDefaultColumns
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{DayTimeIntervalType => DT}
 import org.apache.spark.sql.types.{YearMonthIntervalType => YM}
 import org.apache.spark.sql.types.DayTimeIntervalType._
 import org.apache.spark.sql.types.StructType.fromDDL
 import org.apache.spark.sql.types.YearMonthIntervalType._
+import org.apache.spark.unsafe.types.UTF8String
 
 class StructTypeSuite extends SparkFunSuite with SQLHelper {
 
@@ -326,8 +328,10 @@ class StructTypeSuite extends SparkFunSuite with SQLHelper {
     e = intercept[AnalysisException] {
       check(Seq("S2", "x"), None)
     }
-    assert(e.getMessage.contains(
-      "Field name S2.x is ambiguous and has 2 matching fields in the struct"))
+    checkError(
+      exception = e,
+      errorClass = "AMBIGUOUS_COLUMN_OR_FIELD",
+      parameters = Map("name" -> "`S2`.`x`", "n" -> "2"))
     caseSensitiveCheck(Seq("s2", "x"), Some(Seq("s2") -> StructField("x", IntegerType)))
 
     // simple map type
@@ -430,14 +434,82 @@ class StructTypeSuite extends SparkFunSuite with SQLHelper {
 
     // Invalid merge cases:
 
-    var e = intercept[SparkException] {
-      StructType.fromDDL("c1 DECIMAL(10, 5)").merge(StructType.fromDDL("c1 DECIMAL(12, 2)"))
-    }
-    assert(e.getMessage.contains("Failed to merge decimal types"))
+    checkError(
+      exception = intercept[SparkException] {
+        StructType.fromDDL("c1 DECIMAL(10, 5)").merge(StructType.fromDDL("c1 DECIMAL(12, 2)"))
+      },
+      errorClass = "CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE",
+      parameters = Map("left" -> "\"DECIMAL(10,5)\"", "right" -> "\"DECIMAL(12,2)\"")
+    )
 
-    e = intercept[SparkException] {
-      StructType.fromDDL("c1 DECIMAL(12, 5)").merge(StructType.fromDDL("c1 DECIMAL(12, 2)"))
-    }
-    assert(e.getMessage.contains("Failed to merge decimal types"))
+    checkError(
+      exception = intercept[SparkException] {
+        StructType.fromDDL("c1 DECIMAL(12, 5)").merge(StructType.fromDDL("c1 DECIMAL(12, 2)"))
+      },
+      errorClass = "CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE",
+      parameters = Map("left" -> "\"DECIMAL(12,5)\"", "right" -> "\"DECIMAL(12,2)\"")
+    )
+  }
+
+  test("SPARK-39143: Test parsing default column values out of struct types") {
+    // Positive test: the StructType.defaultValues evaluation is successful.
+    val source1 = StructType(Array(
+      StructField("c1", LongType, true,
+        new MetadataBuilder()
+          .putString(ResolveDefaultColumns.EXISTS_DEFAULT_COLUMN_METADATA_KEY, "CAST(42 AS BIGINT)")
+          .putString(
+            ResolveDefaultColumns.CURRENT_DEFAULT_COLUMN_METADATA_KEY, "CAST(42 AS BIGINT)")
+          .build()),
+      StructField("c2", StringType, true,
+        new MetadataBuilder()
+          .putString(ResolveDefaultColumns.EXISTS_DEFAULT_COLUMN_METADATA_KEY, "'abc'")
+          .putString(ResolveDefaultColumns.CURRENT_DEFAULT_COLUMN_METADATA_KEY, "'abc'")
+          .build()),
+      StructField("c3", BooleanType)))
+    assert(source1.existenceDefaultValues.size == 3)
+    assert(source1.existenceDefaultValues(0) == 42)
+    assert(source1.existenceDefaultValues(1) == UTF8String.fromString("abc"))
+    assert(source1.existenceDefaultValues(2) == null)
+
+    // Positive test: StructType.defaultValues works because the existence default value parses and
+    // resolves successfully, then evaluates to a non-literal expression: this is constant-folded at
+    // reference time.
+    val source2 = StructType(
+      Array(StructField("c1", IntegerType, true,
+        new MetadataBuilder()
+        .putString(ResolveDefaultColumns.EXISTS_DEFAULT_COLUMN_METADATA_KEY, "1 + 1")
+          .putString(ResolveDefaultColumns.CURRENT_DEFAULT_COLUMN_METADATA_KEY, "1 + 1")
+          .build())))
+    val error = "fails to parse as a valid literal value"
+    assert(source2.existenceDefaultValues.size == 1)
+    assert(source2.existenceDefaultValues(0) == 2)
+
+    // Negative test: StructType.defaultValues fails because the existence default value fails to
+    // parse.
+    val source3 = StructType(Array(
+      StructField("c1", IntegerType, true,
+        new MetadataBuilder()
+          .putString(ResolveDefaultColumns.EXISTS_DEFAULT_COLUMN_METADATA_KEY, "invalid")
+          .putString(ResolveDefaultColumns.CURRENT_DEFAULT_COLUMN_METADATA_KEY, "invalid")
+          .build())))
+    assert(intercept[AnalysisException] {
+      source3.existenceDefaultValues
+    }.getMessage.contains(error))
+
+    // Negative test: StructType.defaultValues fails because the existence default value fails to
+    // resolve.
+    val source4 = StructType(Array(
+      StructField("c1", IntegerType, true,
+        new MetadataBuilder()
+          .putString(
+            ResolveDefaultColumns.EXISTS_DEFAULT_COLUMN_METADATA_KEY,
+            "(SELECT 'abc' FROM missingtable)")
+          .putString(
+            ResolveDefaultColumns.CURRENT_DEFAULT_COLUMN_METADATA_KEY,
+            "(SELECT 'abc' FROM missingtable)")
+          .build())))
+    assert(intercept[AnalysisException] {
+      source4.existenceDefaultValues
+    }.getMessage.contains(error))
   }
 }

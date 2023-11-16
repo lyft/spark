@@ -35,6 +35,7 @@ import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, ReturnAnswer}
 import org.apache.spark.sql.catalyst.plans.physical.{Distribution, UnspecifiedDistribution}
 import org.apache.spark.sql.catalyst.rules.{PlanChangeLogger, Rule}
 import org.apache.spark.sql.catalyst.trees.TreeNodeTag
+import org.apache.spark.sql.catalyst.util.sideBySide
 import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec._
@@ -83,7 +84,8 @@ case class AdaptiveSparkPlanExec(
   @transient private val planChangeLogger = new PlanChangeLogger[SparkPlan]()
 
   // The logical plan optimizer for re-optimizing the current logical plan.
-  @transient private val optimizer = new AQEOptimizer(conf)
+  @transient private val optimizer = new AQEOptimizer(conf,
+    session.sessionState.adaptiveRulesHolder.runtimeOptimizerRules)
 
   // `EnsureRequirements` may remove user-specified repartition and assume the query plan won't
   // change its output partitioning. This assumption is not true in AQE. Here we check the
@@ -122,7 +124,7 @@ case class AdaptiveSparkPlanExec(
       RemoveRedundantSorts,
       DisableUnnecessaryBucketedScan,
       OptimizeSkewedJoin(ensureRequirements)
-    ) ++ context.session.sessionState.queryStagePrepRules
+    ) ++ context.session.sessionState.adaptiveRulesHolder.queryStagePrepRules
   }
 
   // A list of physical optimizer rules to be applied to a new stage before its execution. These
@@ -186,7 +188,7 @@ case class AdaptiveSparkPlanExec(
 
   @volatile private var currentPhysicalPlan = initialPlan
 
-  private var isFinalPlan = false
+  @volatile private var _isFinalPlan = false
 
   private var currentStageId = 0
 
@@ -202,6 +204,8 @@ case class AdaptiveSparkPlanExec(
     newStages: Seq[QueryStageExec])
 
   def executedPlan: SparkPlan = currentPhysicalPlan
+
+  def isFinalPlan: Boolean = _isFinalPlan
 
   override def conf: SQLConf = context.session.sessionState.conf
 
@@ -220,6 +224,8 @@ case class AdaptiveSparkPlanExec(
     Option(context.session.sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY))
       .map(_.toLong).filter(SQLExecution.getQueryExecution(_) eq context.qe)
   }
+
+  def finalPhysicalPlan: SparkPlan = withFinalPlanUpdate(identity)
 
   private def getFinalPhysicalPlan(): SparkPlan = lock.synchronized {
     if (isFinalPlan) return currentPhysicalPlan
@@ -263,6 +269,8 @@ case class AdaptiveSparkPlanExec(
                 } else {
                   events.offer(StageFailure(stage, res.failed.get))
                 }
+                // explicitly clean up the resources in this stage
+                stage.cleanupResources()
               }(AdaptiveSparkPlanExec.executionContext)
             } catch {
               case e: Throwable =>
@@ -308,7 +316,8 @@ case class AdaptiveSparkPlanExec(
           val newCost = costEvaluator.evaluateCost(newPhysicalPlan)
           if (newCost < origCost ||
             (newCost == origCost && currentPhysicalPlan != newPhysicalPlan)) {
-            logOnLevel(s"Plan changed from $currentPhysicalPlan to $newPhysicalPlan")
+            logOnLevel("Plan changed:\n" +
+              sideBySide(currentPhysicalPlan.treeString, newPhysicalPlan.treeString).mkString("\n"))
             cleanUpTempTags(newPhysicalPlan)
             currentPhysicalPlan = newPhysicalPlan
             currentLogicalPlan = newLogicalPlan
@@ -324,7 +333,7 @@ case class AdaptiveSparkPlanExec(
         optimizeQueryStage(result.newPlan, isFinalStage = true),
         postStageCreationRules(supportsColumnar),
         Some((planChangeLogger, "AQE Post Stage Creation")))
-      isFinalPlan = true
+      _isFinalPlan = true
       executionId.foreach(onUpdatePlan(_, Seq(currentPhysicalPlan)))
       currentPhysicalPlan
     }
@@ -338,7 +347,7 @@ case class AdaptiveSparkPlanExec(
     if (!isSubquery && currentPhysicalPlan.exists(_.subqueries.nonEmpty)) {
       getExecutionId.foreach(onUpdatePlan(_, Seq.empty))
     }
-    logOnLevel(s"Final plan: $currentPhysicalPlan")
+    logOnLevel(s"Final plan:\n$currentPhysicalPlan")
   }
 
   override def executeCollect(): Array[InternalRow] = {

@@ -34,7 +34,6 @@ import org.apache.hadoop.io.{LongWritable, Writable}
 
 import org.apache.spark.{SparkFiles, TestUtils}
 import org.apache.spark.sql.{AnalysisException, QueryTest, Row}
-import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
 import org.apache.spark.sql.catalyst.plans.logical.Project
 import org.apache.spark.sql.functions.max
 import org.apache.spark.sql.hive.test.TestHiveSingleton
@@ -551,32 +550,6 @@ class HiveUDFSuite extends QueryTest with TestHiveSingleton with SQLTestUtils {
     }
   }
 
-  test("Show persistent functions") {
-    val testData = spark.sparkContext.parallelize(StringCaseClass("") :: Nil).toDF()
-    withTempView("inputTable") {
-      testData.createOrReplaceTempView("inputTable")
-      withUserDefinedFunction("testUDFToListInt" -> false) {
-        val numFunc = spark.catalog.listFunctions().count()
-        sql(s"CREATE FUNCTION testUDFToListInt AS '${classOf[UDFToListInt].getName}'")
-        assert(spark.catalog.listFunctions().count() == numFunc + 1)
-        checkAnswer(
-          sql("SELECT testUDFToListInt(s) FROM inputTable"),
-          Seq(Row(Seq(1, 2, 3))))
-        assert(sql("show functions").count() ==
-          numFunc + FunctionRegistry.builtinOperators.size + 1)
-        assert(spark.catalog.listFunctions().count() == numFunc + 1)
-
-        withDatabase("db2") {
-          sql("CREATE DATABASE db2")
-          sql(s"CREATE FUNCTION db2.testUDFToListInt AS '${classOf[UDFToListInt].getName}'")
-          checkAnswer(
-            sql("SHOW FUNCTIONS IN db2 LIKE 'testUDF*'"),
-            Seq(Row("db2.testudftolistint")))
-        }
-      }
-    }
-  }
-
   test("Temp function has dots in the names") {
     withUserDefinedFunction("test_avg" -> false, "`default.test_avg`" -> true) {
       sql(s"CREATE FUNCTION test_avg AS '${classOf[GenericUDAFAverage].getName}'")
@@ -597,10 +570,19 @@ class HiveUDFSuite extends QueryTest with TestHiveSingleton with SQLTestUtils {
             sql(s"CREATE FUNCTION dAtABaSe1.test_avg AS '${classOf[GenericUDAFAverage].getName}'")
             checkAnswer(sql("SELECT dAtABaSe1.test_avg(1)"), Row(1.0))
           }
-          val message = intercept[AnalysisException] {
-            sql("SELECT dAtABaSe1.unknownFunc(1)")
-          }.getMessage
-          assert(message.contains("Undefined function: dAtABaSe1.unknownFunc"))
+          checkError(
+            exception = intercept[AnalysisException] {
+              sql("SELECT dAtABaSe1.unknownFunc(1)")
+            },
+            errorClass = "UNRESOLVED_ROUTINE",
+            parameters = Map(
+              "routineName" -> "`dAtABaSe1`.`unknownFunc`",
+              "searchPath" ->
+                "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"),
+            context = ExpectedContext(
+              fragment = "dAtABaSe1.unknownFunc(1)",
+              start = 7,
+              stop = 30))
         }
       }
     }

@@ -23,7 +23,7 @@ import org.apache.spark.sql.catalyst.analysis.ResolvedNamespace
 import org.apache.spark.sql.catalyst.dsl.expressions._
 import org.apache.spark.sql.catalyst.dsl.plans._
 import org.apache.spark.sql.catalyst.expressions.{Ascending, Attribute, AttributeMap, AttributeReference, Literal, SortOrder}
-import org.apache.spark.sql.catalyst.plans.PlanTest
+import org.apache.spark.sql.catalyst.plans.{Inner, PlanTest}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.connector.catalog.SupportsNamespaces
 import org.apache.spark.sql.internal.SQLConf
@@ -177,12 +177,28 @@ class BasicStatsEstimationSuite extends PlanTest with StatsEstimationTestBase {
   }
 
   test("windows") {
-    val windows = plan.window(Seq(min(attribute).as('sum_attr)), Seq(attribute), Nil)
+    val windows = plan.window(Seq(min(attribute).as("sum_attr")), Seq(attribute), Nil)
     val windowsStats = Statistics(sizeInBytes = plan.size.get * (4 + 4 + 8) / (4 + 8))
     checkStats(
       windows,
       expectedStatsCboOn = windowsStats,
       expectedStatsCboOff = windowsStats)
+  }
+
+  test("offset estimation: offset < child's rowCount") {
+    val offset = Offset(Literal(2), plan)
+    checkStats(offset, Statistics(sizeInBytes = 96, rowCount = Some(8)))
+  }
+
+  test("offset estimation: offset > child's rowCount") {
+    val offset = Offset(Literal(20), plan)
+    checkStats(offset, Statistics(sizeInBytes = 1, rowCount = Some(0)))
+  }
+
+  test("offset estimation: offset = 0") {
+    val offset = Offset(Literal(0), plan)
+    // Offset is equal to zero, so Offset's stats is equal to its child's stats.
+    checkStats(offset, plan.stats.copy(attributeStats = AttributeMap(Nil)))
   }
 
   test("limit estimation: limit < child's rowCount") {
@@ -312,6 +328,37 @@ class BasicStatsEstimationSuite extends PlanTest with StatsEstimationTestBase {
       expectedStatsCboOff = Statistics(sizeInBytes = sizeInBytes))
   }
 
+  test("SPARK-39851: Improve join stats estimation if one side can keep uniqueness") {
+    val brandId = attr("brand_id")
+    val classId = attr("class_id")
+    val aliasedBrandId = brandId.as("new_brand_id")
+    val aliasedClassId = classId.as("new_class_id")
+
+    val tableSize = 4059900
+    val tableRowCnt = 202995
+
+    val tbl = StatsTestPlan(
+      outputList = Seq(brandId, classId),
+      size = Some(tableSize),
+      rowCount = tableRowCnt,
+      attributeStats =
+        AttributeMap(Seq(
+          brandId -> ColumnStat(Some(858), Some(101001), Some(1016017), Some(0), Some(4), Some(4)),
+          classId -> ColumnStat(Some(16), Some(1), Some(16), Some(0), Some(4), Some(4)))))
+
+    val join = Join(
+      tbl,
+      tbl.groupBy(brandId, classId)(aliasedBrandId, aliasedClassId),
+      Inner,
+      Some(brandId === aliasedBrandId.toAttribute && classId === aliasedClassId.toAttribute),
+      JoinHint.NONE)
+
+    checkStats(
+      join,
+      expectedStatsCboOn = Statistics(4871880, Some(tableRowCnt), join.stats.attributeStats),
+      expectedStatsCboOff = Statistics(sizeInBytes = 4059900 * 2))
+  }
+
   test("row size and column stats estimation for sort") {
     val columnInfo = AttributeMap(
       Seq(
@@ -344,7 +391,7 @@ class BasicStatsEstimationSuite extends PlanTest with StatsEstimationTestBase {
     checkStats(
       sort,
       expectedStatsCboOn = expectedSortStats,
-      expectedStatsCboOff = Statistics(sizeInBytes = expectedSize))
+      expectedStatsCboOff = expectedSortStats)
   }
 
   /** Check estimated stats when cbo is turned on/off. */

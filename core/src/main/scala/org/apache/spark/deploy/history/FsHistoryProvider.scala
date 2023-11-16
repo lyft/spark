@@ -19,7 +19,6 @@ package org.apache.spark.deploy.history
 
 import java.io.{File, FileNotFoundException, IOException}
 import java.lang.{Long => JLong}
-import java.nio.file.Files
 import java.util.{Date, NoSuchElementException, ServiceLoader}
 import java.util.concurrent.{ConcurrentHashMap, ExecutorService, TimeUnit}
 import java.util.zip.ZipOutputStream
@@ -36,15 +35,12 @@ import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
 import org.apache.hadoop.hdfs.DistributedFileSystem
 import org.apache.hadoop.hdfs.protocol.HdfsConstants
 import org.apache.hadoop.security.AccessControlException
-import org.fusesource.leveldbjni.internal.NativeDB
-import org.rocksdb.RocksDBException
 
 import org.apache.spark.{SecurityManager, SparkConf, SparkException}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config._
 import org.apache.spark.internal.config.History._
-import org.apache.spark.internal.config.History.HybridStoreDiskBackend._
 import org.apache.spark.internal.config.Status._
 import org.apache.spark.internal.config.Tests.IS_TESTING
 import org.apache.spark.internal.config.UI._
@@ -136,34 +132,9 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
     HybridStoreDiskBackend.withName(conf.get(History.HYBRID_STORE_DISK_BACKEND))
 
   // Visible for testing.
-  private[history] val listing: KVStore = storePath.map { path =>
-    val dir = hybridStoreDiskBackend match {
-      case LEVELDB => "listing.ldb"
-      case ROCKSDB => "listing.rdb"
-    }
-    val dbPath = Files.createDirectories(new File(path, dir).toPath()).toFile()
-    Utils.chmod700(dbPath)
-
-    val metadata = FsHistoryProviderMetadata(CURRENT_LISTING_VERSION,
-      AppStatusStore.CURRENT_VERSION, logDir)
-
-    try {
-      open(dbPath, metadata, conf)
-    } catch {
-      // If there's an error, remove the listing database and any existing UI database
-      // from the store directory, since it's extremely likely that they'll all contain
-      // incompatible information.
-      case _: UnsupportedStoreVersionException | _: MetadataMismatchException =>
-        logInfo("Detected incompatible DB versions, deleting...")
-        path.listFiles().foreach(Utils.deleteRecursively)
-        open(dbPath, metadata, conf)
-      case dbExc @ (_: NativeDB.DBException | _: RocksDBException) =>
-        // Get rid of the corrupted data and re-create it.
-        logWarning(s"Failed to load disk store $dbPath :", dbExc)
-        Utils.deleteRecursively(dbPath)
-        open(dbPath, metadata, conf)
-    }
-  }.getOrElse(new InMemoryStore())
+  private[history] val listing: KVStore = {
+    KVUtils.createKVStore(storePath, live = false, conf)
+  }
 
   private val diskManager = storePath.map { path =>
     new HistoryServerDiskManager(conf, path, listing, clock)
@@ -325,12 +296,8 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
 
   override def getListing(): Iterator[ApplicationInfo] = {
     // Return the listing in end time descending order.
-    listing.view(classOf[ApplicationInfoWrapper])
-      .index("endTime")
-      .reverse()
-      .iterator()
-      .asScala
-      .map(_.toApplicationInfo())
+    KVUtils.mapToSeq(listing.view(classOf[ApplicationInfoWrapper])
+      .index("endTime").reverse())(_.toApplicationInfo()).iterator
   }
 
   override def getApplicationInfo(appId: String): Option[ApplicationInfo] = {
@@ -476,8 +443,11 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
    * Builds the application list based on the current contents of the log directory.
    * Tries to reuse as much of the data already in memory as possible, by not reading
    * applications that haven't been updated since last time the logs were checked.
+   * Only a max of UPDATE_BATCHSIZE jobs are processed in each cycle, to prevent the process
+   * from running for too long which blocks updating newly appeared eventlog files.
    */
   private[history] def checkForLogs(): Unit = {
+    var count: Int = 0
     try {
       val newLastScanTime = clock.getTimeMillis()
       logDebug(s"Scanning $logDir with lastScanTime==$lastScanTime")
@@ -498,6 +468,20 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
           }
         }
         .flatMap { entry => EventLogFileReader(fs, entry) }
+        .filter { reader =>
+          try {
+            reader.modificationTime
+            true
+          } catch {
+            case e: IllegalArgumentException =>
+              logInfo("Exception in getting modificationTime of "
+                + reader.rootPath.getName + ". " + e.toString)
+              false
+          }
+        }
+        .sortWith { case (entry1, entry2) =>
+          entry1.modificationTime > entry2.modificationTime
+        }
         .filter { reader =>
           try {
             val info = listing.read(classOf[LogInfo], reader.rootPath.toString())
@@ -551,16 +535,32 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
             }
           } catch {
             case _: NoSuchElementException =>
-              // If the file is currently not being tracked by the SHS, add an entry for it and try
-              // to parse it. This will allow the cleaner code to detect the file as stale later on
-              // if it was not possible to parse it.
+              // If the file is currently not being tracked by the SHS, check whether the log file
+              // has expired, if expired, delete it from log dir, if not, add an entry for it and
+              // try to parse it. This will allow the cleaner code to detect the file as stale
+              // later on if it was not possible to parse it.
               try {
-                listing.write(LogInfo(reader.rootPath.toString(), newLastScanTime,
-                  LogType.EventLogs, None, None, reader.fileSizeForLastIndex, reader.lastIndex,
-                  None, reader.completed))
-                reader.fileSizeForLastIndex > 0
+                if (conf.get(CLEANER_ENABLED) && reader.modificationTime <
+                    clock.getTimeMillis() - conf.get(MAX_LOG_AGE_S) * 1000) {
+                  logInfo(s"Deleting expired event log ${reader.rootPath.toString}")
+                  deleteLog(fs, reader.rootPath)
+                  // If the LogInfo read had succeeded, but the ApplicationInafoWrapper
+                  // read failure and throw the exception, we should also cleanup the log
+                  // info from listing db.
+                  listing.delete(classOf[LogInfo], reader.rootPath.toString)
+                  false
+                } else if (count < conf.get(UPDATE_BATCHSIZE)) {
+                  listing.write(LogInfo(reader.rootPath.toString(), newLastScanTime,
+                    LogType.EventLogs, None, None, reader.fileSizeForLastIndex, reader.lastIndex,
+                    None, reader.completed))
+                  count = count + 1
+                  reader.fileSizeForLastIndex > 0
+                } else {
+                  false
+                }
               } catch {
                 case _: FileNotFoundException => false
+                case _: NoSuchElementException => false
                 case NonFatal(e) =>
                   logWarning(s"Error while reading new log ${reader.rootPath}", e)
                   false
@@ -570,9 +570,6 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
               logWarning(s"Error while filtering log ${reader.rootPath}", e)
               false
           }
-        }
-        .sortWith { case (entry1, entry2) =>
-          entry1.modificationTime > entry2.modificationTime
         }
 
       if (updated.nonEmpty) {
@@ -592,11 +589,9 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
       // Only entries with valid applications are cleaned up here. Cleaning up invalid log
       // files is done by the periodic cleaner task.
       val stale = listing.synchronized {
-        listing.view(classOf[LogInfo])
+        KVUtils.viewToSeq(listing.view(classOf[LogInfo])
           .index("lastProcessed")
-          .last(newLastScanTime - 1)
-          .asScala
-          .toList
+          .last(newLastScanTime - 1))
       }
       stale.filterNot(isProcessing)
         .filterNot(info => notStale.contains(info.logPath))
@@ -733,6 +728,17 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
         // to handle permission-only changes with the same file sizes later.
         listing.synchronized {
           listing.delete(classOf[LogInfo], rootPath.toString)
+        }
+      case _: FileNotFoundException
+          if reader.rootPath.getName.endsWith(EventLogFileWriter.IN_PROGRESS) =>
+        val finalFileName = reader.rootPath.getName.stripSuffix(EventLogFileWriter.IN_PROGRESS)
+        val finalFilePath = new Path(reader.rootPath.getParent, finalFileName)
+        if (fs.exists(finalFilePath)) {
+          // Do nothing, the application completed during processing, the final event log file
+          // will be processed by next around.
+        } else {
+          logWarning(s"In-progress event log file does not exist: ${reader.rootPath}, " +
+            s"neither does the final event log file: $finalFilePath.")
         }
       case e: Exception =>
         logError("Exception while merging application listings", e)
@@ -958,12 +964,10 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
     val maxTime = clock.getTimeMillis() - conf.get(MAX_LOG_AGE_S) * 1000
     val maxNum = conf.get(MAX_LOG_NUM)
 
-    val expired = listing.view(classOf[ApplicationInfoWrapper])
+    val expired = KVUtils.viewToSeq(listing.view(classOf[ApplicationInfoWrapper])
       .index("oldestAttempt")
       .reverse()
-      .first(maxTime)
-      .asScala
-      .toList
+      .first(maxTime))
     expired.foreach { app =>
       // Applications may have multiple attempts, some of which may not need to be deleted yet.
       val (remaining, toDelete) = app.attempts.partition { attempt =>
@@ -973,13 +977,10 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
     }
 
     // Delete log files that don't have a valid application and exceed the configured max age.
-    val stale = listing.view(classOf[LogInfo])
+    val stale = KVUtils.viewToSeq(listing.view(classOf[LogInfo])
       .index("lastProcessed")
       .reverse()
-      .first(maxTime)
-      .asScala
-      .filter { l => l.logType == null || l.logType == LogType.EventLogs }
-      .toList
+      .first(maxTime), Int.MaxValue) { l => l.logType == null || l.logType == LogType.EventLogs }
     stale.filterNot(isProcessing).foreach { log =>
       if (log.appId.isEmpty) {
         logInfo(s"Deleting invalid / corrupt event log ${log.logPath}")
@@ -990,14 +991,11 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
 
     // If the number of files is bigger than MAX_LOG_NUM,
     // clean up all completed attempts per application one by one.
-    val num = listing.view(classOf[LogInfo]).index("lastProcessed").asScala.size
+    val num = KVUtils.size(listing.view(classOf[LogInfo]).index("lastProcessed"))
     var count = num - maxNum
     if (count > 0) {
       logInfo(s"Try to delete $count old event logs to keep $maxNum logs in total.")
-      val oldAttempts = listing.view(classOf[ApplicationInfoWrapper])
-        .index("oldestAttempt")
-        .asScala
-      oldAttempts.foreach { app =>
+      KVUtils.foreach(listing.view(classOf[ApplicationInfoWrapper]).index("oldestAttempt")) { app =>
         if (count > 0) {
           // Applications may have multiple attempts, some of which may not be completed yet.
           val (toDelete, remaining) = app.attempts.partition(_.info.completed)
@@ -1081,13 +1079,10 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
 
     // Delete driver log file entries that exceed the configured max age and
     // may have been deleted on filesystem externally.
-    val stale = listing.view(classOf[LogInfo])
+    val stale = KVUtils.viewToSeq(listing.view(classOf[LogInfo])
       .index("lastProcessed")
       .reverse()
-      .first(maxTime)
-      .asScala
-      .filter { l => l.logType != null && l.logType == LogType.DriverLogs }
-      .toList
+      .first(maxTime), Int.MaxValue) { l => l.logType != null && l.logType == LogType.DriverLogs }
     stale.filterNot(isProcessing).foreach { log =>
       logInfo(s"Deleting invalid driver log ${log.logPath}")
       listing.delete(classOf[LogInfo], log.logPath)
@@ -1219,7 +1214,7 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
     // the existing data.
     dm.openStore(appId, attempt.info.attemptId).foreach { path =>
       try {
-        return KVUtils.open(path, metadata, conf)
+        return KVUtils.open(path, metadata, conf, live = false)
       } catch {
         case e: Exception =>
           logInfo(s"Failed to open existing store for $appId/${attempt.info.attemptId}.", e)
@@ -1285,14 +1280,14 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
     try {
       logInfo(s"Leasing disk manager space for app $appId / ${attempt.info.attemptId}...")
       lease = dm.lease(reader.totalSize, reader.compressionCodec.isDefined)
-      val diskStore = KVUtils.open(lease.tmpPath, metadata, conf)
+      val diskStore = KVUtils.open(lease.tmpPath, metadata, conf, live = false)
       hybridStore.setDiskStore(diskStore)
       hybridStore.switchToDiskStore(new HybridStore.SwitchToDiskStoreListener {
         override def onSwitchToDiskStoreSuccess: Unit = {
           logInfo(s"Completely switched to diskStore for app $appId / ${attempt.info.attemptId}.")
           diskStore.close()
           val newStorePath = lease.commit(appId, attempt.info.attemptId)
-          hybridStore.setDiskStore(KVUtils.open(newStorePath, metadata, conf))
+          hybridStore.setDiskStore(KVUtils.open(newStorePath, metadata, conf, live = false))
           memoryManager.release(appId, attempt.info.attemptId)
         }
         override def onSwitchToDiskStoreFail(e: Exception): Unit = {
@@ -1328,7 +1323,7 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
       logInfo(s"Leasing disk manager space for app $appId / ${attempt.info.attemptId}...")
       val lease = dm.lease(reader.totalSize, isCompressed)
       try {
-        Utils.tryWithResource(KVUtils.open(lease.tmpPath, metadata, conf)) { store =>
+        Utils.tryWithResource(KVUtils.open(lease.tmpPath, metadata, conf, live = false)) { store =>
           rebuildAppStore(store, reader, attempt.info.lastUpdated.getTime())
         }
         newStorePath = lease.commit(appId, attempt.info.attemptId)
@@ -1346,7 +1341,7 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
       }
     }
 
-    KVUtils.open(newStorePath, metadata, conf)
+    KVUtils.open(newStorePath, metadata, conf, live = false)
   }
 
   private def createInMemoryStore(attempt: AttemptInfoWrapper): KVStore = {
@@ -1431,7 +1426,7 @@ private[history] class FsHistoryProvider(conf: SparkConf, clock: Clock)
   }
 }
 
-private[history] object FsHistoryProvider {
+private[spark] object FsHistoryProvider {
 
   private val APPL_START_EVENT_PREFIX = "{\"Event\":\"SparkListenerApplicationStart\""
 
@@ -1446,10 +1441,10 @@ private[history] object FsHistoryProvider {
    * db, if the version does not match this value, the FsHistoryProvider will throw away
    * all data and re-generate the listing data from the event logs.
    */
-  private[history] val CURRENT_LISTING_VERSION = 1L
+  val CURRENT_LISTING_VERSION = 1L
 }
 
-private[history] case class FsHistoryProviderMetadata(
+private[spark] case class FsHistoryProviderMetadata(
     version: Long,
     uiVersion: Long,
     logDir: String)

@@ -213,14 +213,14 @@ class DecorrelateInnerQuerySuite extends PlanTest {
   test("correlated values in project with alias") {
     val outerPlan = testRelation2
     val innerPlan =
-      Project(Seq(OuterReference(x).as("x1"), 'y1, 'sum),
+      Project(Seq(OuterReference(x).as("x1"), $"y1", $"sum"),
         Project(Seq(
           OuterReference(x),
           OuterReference(y).as("y1"),
           Add(OuterReference(x), OuterReference(y)).as("sum")),
             testRelation)).analyze
     val correctAnswer =
-      Project(Seq(x.as("x1"), 'y1, 'sum, x, y),
+      Project(Seq(x.as("x1"), $"y1", $"sum", x, y),
         Project(Seq(x.as(x.name), y.as("y1"), (x + y).as("sum"), x, y),
           DomainJoin(Seq(x, y), testRelation))).analyze
     check(innerPlan, outerPlan, correctAnswer, Seq(x <=> x, y <=> y))
@@ -263,7 +263,7 @@ class DecorrelateInnerQuerySuite extends PlanTest {
     val outerPlan = testRelation2
     val innerPlan =
       Aggregate(
-        Seq('x1), Seq(min('y1).as("min_y1")),
+        Seq($"x1"), Seq(min($"y1").as("min_y1")),
         Project(
           Seq(a, OuterReference(x).as("x1"), OuterReference(y).as("y1")),
           Filter(
@@ -274,13 +274,63 @@ class DecorrelateInnerQuerySuite extends PlanTest {
       ).analyze
     val correctAnswer =
       Aggregate(
-        Seq('x1, y, a), Seq(min('y1).as("min_y1"), y, a),
+        Seq($"x1", y, a), Seq(min($"y1").as("min_y1"), y, a),
         Project(
           Seq(a, a.as("x1"), y.as("y1"), y),
           DomainJoin(Seq(y), testRelation)
         )
       ).analyze
     check(innerPlan, outerPlan, correctAnswer, Seq(y <=> y, x === a, y === z))
+  }
+
+  test("union in correlation path") {
+    val outerPlan = testRelation2
+    val innerPlan =
+      Union(
+        Filter(And(OuterReference(x) === a, c === 3),
+          testRelation),
+        Filter(And(OuterReference(y) === b, c === 6),
+          testRelation))
+    val correctAnswer =
+      Union(
+        Project(Seq(a, b, c, x, y),
+          Filter(And(x === a, c === 3),
+            DomainJoin(Seq(x, y),
+              testRelation))),
+        Project(Seq(a, b, c, x, y),
+          Filter(And(y === b, c === 6),
+            DomainJoin(Seq(x, y),
+              testRelation)))
+      )
+    check(innerPlan, outerPlan, correctAnswer, Seq(x <=> x, y <=> y))
+  }
+
+  test("another union in correlation path") {
+    val outerPlan = testRelation2
+    val innerPlan =
+      Union(Seq(
+        Filter(And(OuterReference(x) === a, a > 2),
+          testRelation),
+        Filter(And(OuterReference(y) === b, b > 3),
+          testRelation),
+        Filter(And(OuterReference(z) === c, c > 4),
+          testRelation)))
+    val correctAnswer =
+      Union(Seq(
+        Project(Seq(a, b, c, x, y, z),
+          Filter(And(x === a, a > 2),
+            DomainJoin(Seq(x, y, z),
+              testRelation))),
+        Project(Seq(a, b, c, x, y, z),
+          Filter(And(y === b, b > 3),
+            DomainJoin(Seq(x, y, z),
+              testRelation))),
+        Project(Seq(a, b, c, x, y, z),
+          Filter(And(z === c, c > 4),
+            DomainJoin(Seq(x, y, z),
+              testRelation)))
+      ))
+    check(innerPlan, outerPlan, correctAnswer, Seq(x <=> x, y <=> y, z <=> z))
   }
 
   test("SPARK-38155: distinct with non-equality correlated predicates") {

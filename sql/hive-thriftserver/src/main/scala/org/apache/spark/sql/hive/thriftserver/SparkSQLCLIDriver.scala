@@ -39,7 +39,7 @@ import org.apache.thrift.transport.TSocket
 import org.slf4j.LoggerFactory
 import sun.misc.{Signal, SignalHandler}
 
-import org.apache.spark.SparkConf
+import org.apache.spark.{ErrorMessageFormat, SparkConf, SparkThrowable, SparkThrowableHelper}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.AnalysisException
@@ -47,8 +47,11 @@ import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.hive.HiveUtils
 import org.apache.spark.sql.hive.client.HiveClientImpl
 import org.apache.spark.sql.hive.security.HiveDelegationTokenProvider
+import org.apache.spark.sql.hive.thriftserver.SparkSQLCLIDriver.closeHiveSessionStateIfStarted
 import org.apache.spark.sql.internal.SharedState
+import org.apache.spark.sql.internal.SQLConf.LEGACY_EMPTY_CURRENT_DB_IN_CLI
 import org.apache.spark.util.ShutdownHookManager
+import org.apache.spark.util.SparkExitCode._
 
 /**
  * This code doesn't support remote connections in Hive 1.2+, as the underlying CliDriver
@@ -59,6 +62,7 @@ private[hive] object SparkSQLCLIDriver extends Logging {
   private val continuedPrompt = "".padTo(prompt.length, ' ')
   private var transport: TSocket = _
   private final val SPARK_HADOOP_PROP_PREFIX = "spark.hadoop."
+  private var exitCode = 0
 
   initializeLogIfNecessary(true)
   installSignalHandler()
@@ -82,10 +86,15 @@ private[hive] object SparkSQLCLIDriver extends Logging {
     })
   }
 
+  def exit(code: Int): Unit = {
+    exitCode = code
+    System.exit(exitCode)
+  }
+
   def main(args: Array[String]): Unit = {
     val oproc = new OptionsProcessor()
     if (!oproc.process_stage1(args)) {
-      System.exit(1)
+      System.exit(EXIT_FAILURE)
     }
 
     val sparkConf = new SparkConf(loadDefaults = true)
@@ -102,11 +111,14 @@ private[hive] object SparkSQLCLIDriver extends Logging {
       sessionState.info = new PrintStream(System.err, true, UTF_8.name())
       sessionState.err = new PrintStream(System.err, true, UTF_8.name())
     } catch {
-      case e: UnsupportedEncodingException => System.exit(3)
+      case e: UnsupportedEncodingException =>
+        closeHiveSessionStateIfStarted(sessionState)
+        exit(ERROR_PATH_NOT_FOUND)
     }
 
     if (!oproc.process_stage2(sessionState)) {
-      System.exit(2)
+      closeHiveSessionStateIfStarted(sessionState)
+      exit(ERROR_MISUSE_SHELL_BUILTIN)
     }
 
     // Set all properties specified via command line.
@@ -139,7 +151,10 @@ private[hive] object SparkSQLCLIDriver extends Logging {
     SessionState.setCurrentSessionState(sessionState)
 
     // Clean up after we exit
-    ShutdownHookManager.addShutdownHook { () => SparkSQLEnv.stop() }
+    ShutdownHookManager.addShutdownHook { () =>
+      closeHiveSessionStateIfStarted(sessionState)
+      SparkSQLEnv.stop(exitCode)
+    }
 
     if (isRemoteMode(sessionState)) {
       // Hive 1.2 + not supported in CLI
@@ -183,16 +198,8 @@ private[hive] object SparkSQLCLIDriver extends Logging {
       sessionState.info = new PrintStream(System.err, true, UTF_8.name())
       sessionState.err = new PrintStream(System.err, true, UTF_8.name())
     } catch {
-      case e: UnsupportedEncodingException => System.exit(3)
+      case e: UnsupportedEncodingException => exit(ERROR_PATH_NOT_FOUND)
     }
-
-    if (sessionState.database != null) {
-      SparkSQLEnv.sqlContext.sessionState.catalog.setCurrentDatabase(
-        s"${sessionState.database}")
-    }
-
-    // Execute -i init files (always in silent mode)
-    cli.processInitFiles(sessionState)
 
     // We don't propagate hive.metastore.warehouse.dir, because it might has been adjusted in
     // [[SharedState.loadHiveConfFile]] based on the user specified or default values of
@@ -201,20 +208,27 @@ private[hive] object SparkSQLCLIDriver extends Logging {
       SparkSQLEnv.sqlContext.setConf(k, v)
     }
 
+    if (sessionState.database != null) {
+      SparkSQLEnv.sqlContext.sql(s"USE ${sessionState.database}")
+    }
+
+    // Execute -i init files (always in silent mode)
+    cli.processInitFiles(sessionState)
+
     cli.printMasterAndAppId
 
     if (sessionState.execString != null) {
-      System.exit(cli.processLine(sessionState.execString))
+      exit(cli.processLine(sessionState.execString))
     }
 
     try {
       if (sessionState.fileName != null) {
-        System.exit(cli.processFile(sessionState.fileName))
+        exit(cli.processFile(sessionState.fileName))
       }
     } catch {
       case e: FileNotFoundException =>
         logError(s"Could not open input file for reading. (${e.getMessage})")
-        System.exit(3)
+        exit(ERROR_PATH_NOT_FOUND)
     }
 
     val reader = new ConsoleReader()
@@ -265,8 +279,15 @@ private[hive] object SparkSQLCLIDriver extends Logging {
 
     var ret = 0
     var prefix = ""
-    val currentDB = ReflectionUtils.invokeStatic(classOf[CliDriver], "getFormattedDb",
-      classOf[HiveConf] -> conf, classOf[CliSessionState] -> sessionState)
+
+    def currentDB = {
+      if (!SparkSQLEnv.sqlContext.conf.getConf(LEGACY_EMPTY_CURRENT_DB_IN_CLI)) {
+        s" (${SparkSQLEnv.sqlContext.sparkSession.catalog.currentDatabase})"
+      } else {
+        ReflectionUtils.invokeStatic(classOf[CliDriver], "getFormattedDb",
+          classOf[HiveConf] -> conf, classOf[CliSessionState] -> sessionState)
+      }
+    }
 
     def promptWithCurrentDB: String = s"$prompt$currentDB"
     def continuedPromptWithDBSpaces: String = continuedPrompt + ReflectionUtils.invokeStatic(
@@ -294,9 +315,9 @@ private[hive] object SparkSQLCLIDriver extends Logging {
       line = reader.readLine(currentPrompt + "> ")
     }
 
-    sessionState.close()
+    closeHiveSessionStateIfStarted(sessionState)
 
-    System.exit(ret)
+    exit(ret)
   }
 
 
@@ -305,6 +326,16 @@ private[hive] object SparkSQLCLIDriver extends Logging {
     state.isHiveServerQuery
   }
 
+  def printUsage(): Unit = {
+    val processor = new OptionsProcessor()
+    ReflectionUtils.invoke(classOf[OptionsProcessor], processor, "printUsage")
+  }
+
+  private def closeHiveSessionStateIfStarted(state: SessionState): Unit = {
+    if (ReflectionUtils.getSuperField(state, "isStarted").asInstanceOf[Boolean]) {
+      state.close()
+    }
+  }
 }
 
 private[hive] class SparkSQLCLIDriver extends CliDriver with Logging {
@@ -350,8 +381,8 @@ private[hive] class SparkSQLCLIDriver extends CliDriver with Logging {
     val cmd_1: String = cmd_trimmed.substring(tokens(0).length()).trim()
     if (cmd_lower.equals("quit") ||
       cmd_lower.equals("exit")) {
-      sessionState.close()
-      System.exit(0)
+      closeHiveSessionStateIfStarted(sessionState)
+      SparkSQLCLIDriver.exit(EXIT_SUCCESS)
     }
     if (tokens(0).toLowerCase(Locale.ROOT).equals("source") ||
       cmd_trimmed.startsWith("!") || isRemoteMode) {
@@ -387,19 +418,17 @@ private[hive] class SparkSQLCLIDriver extends CliDriver with Logging {
 
           ret = rc.getResponseCode
           if (ret != 0) {
-            rc.getException match {
-              case e: AnalysisException => e.cause match {
-                case Some(_) if !sessionState.getIsSilent =>
-                  err.println(
-                    s"""Error in query: ${e.getMessage}
-                       |${org.apache.hadoop.util.StringUtils.stringifyException(e)}
-                     """.stripMargin)
-                // For analysis exceptions in silent mode or simple ones that only related to the
-                // query itself, such as `NoSuchDatabaseException`, only the error is printed out
-                // to the console.
-                case _ => err.println(s"""Error in query: ${e.getMessage}""")
-              }
-              case _ => err.println(rc.getErrorMessage())
+            val format = SparkSQLEnv.sqlContext.conf.errorMessageFormat
+            val e = rc.getException
+            val msg = e match {
+              case st: SparkThrowable with Throwable => SparkThrowableHelper.getMessage(st, format)
+              case _ => e.getMessage
+            }
+            err.println(msg)
+            if (format == ErrorMessageFormat.PRETTY &&
+                !sessionState.getIsSilent &&
+                (!e.isInstanceOf[AnalysisException] || e.getCause != null)) {
+              e.printStackTrace(err)
             }
             driver.close()
             return ret
@@ -476,7 +505,7 @@ private[hive] class SparkSQLCLIDriver extends CliDriver with Logging {
           // Kill the VM on second ctrl+c
           if (!initialRequest) {
             console.printInfo("Exiting the JVM")
-            System.exit(127)
+            SparkSQLCLIDriver.exit(ERROR_COMMAND_NOT_FOUND)
           }
 
           // Interrupt the CLI thread to stop the current statement and return

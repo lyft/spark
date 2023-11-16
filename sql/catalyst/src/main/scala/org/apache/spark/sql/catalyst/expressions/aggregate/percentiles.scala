@@ -17,21 +17,22 @@
 
 package org.apache.spark.sql.catalyst.expressions.aggregate
 
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, DataOutputStream}
 import java.util
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
-import org.apache.spark.sql.catalyst.analysis.TypeCheckResult.{TypeCheckFailure, TypeCheckSuccess}
+import org.apache.spark.sql.catalyst.analysis.TypeCheckResult.{DataTypeMismatch, TypeCheckSuccess}
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.trees.{BinaryLike, TernaryLike}
+import org.apache.spark.sql.catalyst.expressions.Cast._
+import org.apache.spark.sql.catalyst.trees.{BinaryLike, TernaryLike, UnaryLike}
 import org.apache.spark.sql.catalyst.util._
 import org.apache.spark.sql.errors.QueryExecutionErrors
 import org.apache.spark.sql.types._
+import org.apache.spark.sql.types.TypeCollection.NumericAndAnsiInterval
 import org.apache.spark.util.collection.OpenHashMap
 
-abstract class PercentileBase extends TypedImperativeAggregate[OpenHashMap[AnyRef, Long]]
-  with ImplicitCastInputTypes {
+abstract class PercentileBase
+  extends TypedAggregateWithHashMapAsBuffer with ImplicitCastInputTypes {
 
   val child: Expression
   val percentageExpression: Expression
@@ -57,9 +58,13 @@ abstract class PercentileBase extends TypedImperativeAggregate[OpenHashMap[AnyRe
   // Returns null for empty inputs
   override def nullable: Boolean = true
 
-  override lazy val dataType: DataType = percentageExpression.dataType match {
-    case _: ArrayType => ArrayType(DoubleType, false)
-    case _ => DoubleType
+  override lazy val dataType: DataType = {
+    val resultType = child.dataType match {
+      case _: YearMonthIntervalType => YearMonthIntervalType()
+      case _: DayTimeIntervalType => DayTimeIntervalType()
+      case _ => DoubleType
+    }
+    if (returnPercentileArray) ArrayType(resultType, false) else resultType
   }
 
   override def inputTypes: Seq[AbstractDataType] = {
@@ -67,7 +72,7 @@ abstract class PercentileBase extends TypedImperativeAggregate[OpenHashMap[AnyRe
       case _: ArrayType => ArrayType(DoubleType, false)
       case _ => DoubleType
     }
-    Seq(NumericType, percentageExpType, IntegralType)
+    Seq(NumericAndAnsiInterval, percentageExpType, IntegralType)
   }
 
   // Check the inputTypes are valid, and the percentageExpression satisfies:
@@ -80,14 +85,28 @@ abstract class PercentileBase extends TypedImperativeAggregate[OpenHashMap[AnyRe
       defaultCheck
     } else if (!percentageExpression.foldable) {
       // percentageExpression must be foldable
-      TypeCheckFailure("The percentage(s) must be a constant literal, " +
-        s"but got $percentageExpression")
+      DataTypeMismatch(
+        errorSubClass = "NON_FOLDABLE_INPUT",
+        messageParameters = Map(
+          "inputName" -> "percentage",
+          "inputType" -> toSQLType(percentageExpression.dataType),
+          "inputExpr" -> toSQLExpr(percentageExpression))
+      )
     } else if (percentages == null) {
-      TypeCheckFailure("Percentage value must not be null")
+      DataTypeMismatch(
+        errorSubClass = "UNEXPECTED_NULL",
+        messageParameters = Map("exprName" -> "percentage")
+      )
     } else if (percentages.exists(percentage => percentage < 0.0 || percentage > 1.0)) {
       // percentages(s) must be in the range [0.0, 1.0]
-      TypeCheckFailure("Percentage(s) must be between 0.0 and 1.0, " +
-        s"but got $percentageExpression")
+      DataTypeMismatch(
+        errorSubClass = "VALUE_OUT_OF_RANGE",
+        messageParameters = Map(
+          "exprName" -> "percentage",
+          "valueRange" -> "[0.0, 1.0]",
+          "currentValue" -> percentages.map(toSQLValue(_, DoubleType)).mkString(",")
+        )
+      )
     } else {
       TypeCheckSuccess
     }
@@ -96,11 +115,6 @@ abstract class PercentileBase extends TypedImperativeAggregate[OpenHashMap[AnyRe
   protected def toDoubleValue(d: Any): Double = d match {
     case d: Decimal => d.toDouble
     case n: Number => n.doubleValue
-  }
-
-  override def createAggregationBuffer(): OpenHashMap[AnyRef, Long] = {
-    // Initialize new counts map instance here.
-    new OpenHashMap[AnyRef, Long]()
   }
 
   override def update(
@@ -161,8 +175,13 @@ abstract class PercentileBase extends TypedImperativeAggregate[OpenHashMap[AnyRe
     }
   }
 
-  private def generateOutput(results: Seq[Double]): Any = {
-    if (results.isEmpty) {
+  private def generateOutput(percentiles: Seq[Double]): Any = {
+    val results = child.dataType match {
+      case _: YearMonthIntervalType => percentiles.map(_.toInt)
+      case _: DayTimeIntervalType => percentiles.map(_.toLong)
+      case _ => percentiles
+    }
+    if (percentiles.isEmpty) {
       null
     } else if (returnPercentileArray) {
       new GenericArrayData(results)
@@ -217,56 +236,6 @@ abstract class PercentileBase extends TypedImperativeAggregate[OpenHashMap[AnyRe
       case ix => ix
     }
   }
-
-  private lazy val projection = UnsafeProjection.create(Array[DataType](child.dataType, LongType))
-
-  override def serialize(obj: OpenHashMap[AnyRef, Long]): Array[Byte] = {
-    val buffer = new Array[Byte](4 << 10)  // 4K
-    val bos = new ByteArrayOutputStream()
-    val out = new DataOutputStream(bos)
-    try {
-      // Write pairs in counts map to byte buffer.
-      obj.foreach { case (key, count) =>
-        val row = InternalRow.apply(key, count)
-        val unsafeRow = projection.apply(row)
-        out.writeInt(unsafeRow.getSizeInBytes)
-        unsafeRow.writeToStream(out, buffer)
-      }
-      out.writeInt(-1)
-      out.flush()
-
-      bos.toByteArray
-    } finally {
-      out.close()
-      bos.close()
-    }
-  }
-
-  override def deserialize(bytes: Array[Byte]): OpenHashMap[AnyRef, Long] = {
-    val bis = new ByteArrayInputStream(bytes)
-    val ins = new DataInputStream(bis)
-    try {
-      val counts = new OpenHashMap[AnyRef, Long]
-      // Read unsafeRow size and content in bytes.
-      var sizeOfNextRow = ins.readInt()
-      while (sizeOfNextRow >= 0) {
-        val bs = new Array[Byte](sizeOfNextRow)
-        ins.readFully(bs)
-        val row = new UnsafeRow(2)
-        row.pointTo(bs, sizeOfNextRow)
-        // Insert the pairs into counts map.
-        val key = row.get(0, child.dataType)
-        val count = row.get(1, LongType).asInstanceOf[Long]
-        counts.update(key, count)
-        sizeOfNextRow = ins.readInt()
-      }
-
-      counts
-    } finally {
-      ins.close()
-      bis.close()
-    }
-  }
 }
 
 /**
@@ -287,12 +256,14 @@ abstract class PercentileBase extends TypedImperativeAggregate[OpenHashMap[AnyRe
   usage =
     """
       _FUNC_(col, percentage [, frequency]) - Returns the exact percentile value of numeric
-       column `col` at the given percentage. The value of percentage must be
+       or ANSI interval column `col` at the given percentage. The value of percentage must be
        between 0.0 and 1.0. The value of frequency should be positive integral
+
       _FUNC_(col, array(percentage1 [, percentage2]...) [, frequency]) - Returns the exact
       percentile value array of numeric column `col` at the given percentage(s). Each value
       of the percentage array must be between 0.0 and 1.0. The value of frequency should be
       positive integral
+
       """,
   examples = """
     Examples:
@@ -300,6 +271,10 @@ abstract class PercentileBase extends TypedImperativeAggregate[OpenHashMap[AnyRe
        3.0
       > SELECT _FUNC_(col, array(0.25, 0.75)) FROM VALUES (0), (10) AS tab(col);
        [2.5,7.5]
+      > SELECT _FUNC_(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
+       0-5
+      > SELECT _FUNC_(col, array(0.2, 0.5)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col);
+       [0 00:00:02.000000000,0 00:00:05.000000000]
   """,
   group = "agg_funcs",
   since = "2.1.0")
@@ -352,16 +327,40 @@ case class Percentile(
   )
 }
 
+@ExpressionDescription(
+  usage = "_FUNC_(col) - Returns the median of numeric or ANSI interval column `col`.",
+  examples = """
+    Examples:
+      > SELECT _FUNC_(col) FROM VALUES (0), (10) AS tab(col);
+       5.0
+      > SELECT _FUNC_(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
+       0-5
+  """,
+  group = "agg_funcs",
+  since = "3.4.0")
+case class Median(child: Expression)
+  extends AggregateFunction
+  with RuntimeReplaceableAggregate
+  with ImplicitCastInputTypes
+  with UnaryLike[Expression] {
+  private lazy val percentile = new Percentile(child, Literal(0.5, DoubleType))
+  override def replacement: Expression = percentile
+  override def nodeName: String = "median"
+  override def inputTypes: Seq[AbstractDataType] = percentile.inputTypes.take(1)
+  override protected def withNewChildInternal(
+      newChild: Expression): Median = this.copy(child = newChild)
+}
+
 /**
  * Return a percentile value based on a continuous distribution of
- * numeric column at the given percentage (specified in ORDER BY clause).
+ * numeric or ANSI interval column at the given percentage (specified in ORDER BY clause).
  * The value of percentage must be between 0.0 and 1.0.
  */
 case class PercentileCont(left: Expression, right: Expression, reverse: Boolean = false)
   extends AggregateFunction
-    with RuntimeReplaceableAggregate
-    with ImplicitCastInputTypes
-    with BinaryLike[Expression] {
+  with RuntimeReplaceableAggregate
+  with ImplicitCastInputTypes
+  with BinaryLike[Expression] {
   private lazy val percentile = new Percentile(left, right, reverse)
   override def replacement: Expression = percentile
   override def nodeName: String = "percentile_cont"
@@ -369,7 +368,7 @@ case class PercentileCont(left: Expression, right: Expression, reverse: Boolean 
   override def sql(isDistinct: Boolean): String = {
     val distinct = if (isDistinct) "DISTINCT " else ""
     val direction = if (reverse) " DESC" else ""
-    s"$prettyName($distinct${right.sql}) WITHIN GROUP (ORDER BY v$direction)"
+    s"$prettyName($distinct${right.sql}) WITHIN GROUP (ORDER BY ${left.sql}$direction)"
   }
   override protected def withNewChildrenInternal(
       newLeft: Expression, newRight: Expression): PercentileCont =
@@ -409,7 +408,7 @@ case class PercentileDisc(
   override def sql(isDistinct: Boolean): String = {
     val distinct = if (isDistinct) "DISTINCT " else ""
     val direction = if (reverse) " DESC" else ""
-    s"$prettyName($distinct${right.sql}) WITHIN GROUP (ORDER BY v$direction)"
+    s"$prettyName($distinct${right.sql}) WITHIN GROUP (ORDER BY ${left.sql}$direction)"
   }
 
   override protected def withNewChildrenInternal(

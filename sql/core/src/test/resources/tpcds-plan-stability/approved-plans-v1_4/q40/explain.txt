@@ -15,26 +15,26 @@ TakeOrderedAndProject (33)
                :     :     :     :  +- Exchange (4)
                :     :     :     :     +- * Filter (3)
                :     :     :     :        +- * ColumnarToRow (2)
-               :     :     :     :           +- Scan parquet default.catalog_sales (1)
+               :     :     :     :           +- Scan parquet spark_catalog.default.catalog_sales (1)
                :     :     :     +- * Sort (11)
                :     :     :        +- Exchange (10)
                :     :     :           +- * Project (9)
                :     :     :              +- * Filter (8)
                :     :     :                 +- * ColumnarToRow (7)
-               :     :     :                    +- Scan parquet default.catalog_returns (6)
+               :     :     :                    +- Scan parquet spark_catalog.default.catalog_returns (6)
                :     :     +- BroadcastExchange (17)
                :     :        +- * Filter (16)
                :     :           +- * ColumnarToRow (15)
-               :     :              +- Scan parquet default.warehouse (14)
+               :     :              +- Scan parquet spark_catalog.default.warehouse (14)
                :     +- BroadcastExchange (24)
                :        +- * Project (23)
                :           +- * Filter (22)
                :              +- * ColumnarToRow (21)
-               :                 +- Scan parquet default.item (20)
+               :                 +- Scan parquet spark_catalog.default.item (20)
                +- ReusedExchange (27)
 
 
-(1) Scan parquet default.catalog_sales
+(1) Scan parquet spark_catalog.default.catalog_sales
 Output [5]: [cs_warehouse_sk#1, cs_item_sk#2, cs_order_number#3, cs_sales_price#4, cs_sold_date_sk#5]
 Batched: true
 Location: InMemoryFileIndex []
@@ -57,7 +57,7 @@ Arguments: hashpartitioning(cs_order_number#3, cs_item_sk#2, 5), ENSURE_REQUIREM
 Input [5]: [cs_warehouse_sk#1, cs_item_sk#2, cs_order_number#3, cs_sales_price#4, cs_sold_date_sk#5]
 Arguments: [cs_order_number#3 ASC NULLS FIRST, cs_item_sk#2 ASC NULLS FIRST], false, 0
 
-(6) Scan parquet default.catalog_returns
+(6) Scan parquet spark_catalog.default.catalog_returns
 Output [4]: [cr_item_sk#7, cr_order_number#8, cr_refunded_cash#9, cr_returned_date_sk#10]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/catalog_returns]
@@ -86,13 +86,14 @@ Arguments: [cr_order_number#8 ASC NULLS FIRST, cr_item_sk#7 ASC NULLS FIRST], fa
 (12) SortMergeJoin [codegen id : 8]
 Left keys [2]: [cs_order_number#3, cs_item_sk#2]
 Right keys [2]: [cr_order_number#8, cr_item_sk#7]
+Join type: LeftOuter
 Join condition: None
 
 (13) Project [codegen id : 8]
 Output [5]: [cs_warehouse_sk#1, cs_item_sk#2, cs_sales_price#4, cs_sold_date_sk#5, cr_refunded_cash#9]
 Input [8]: [cs_warehouse_sk#1, cs_item_sk#2, cs_order_number#3, cs_sales_price#4, cs_sold_date_sk#5, cr_item_sk#7, cr_order_number#8, cr_refunded_cash#9]
 
-(14) Scan parquet default.warehouse
+(14) Scan parquet spark_catalog.default.warehouse
 Output [2]: [w_warehouse_sk#11, w_state#12]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/warehouse]
@@ -113,13 +114,14 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, false] as bigint)
 (18) BroadcastHashJoin [codegen id : 8]
 Left keys [1]: [cs_warehouse_sk#1]
 Right keys [1]: [w_warehouse_sk#11]
+Join type: Inner
 Join condition: None
 
 (19) Project [codegen id : 8]
 Output [5]: [cs_item_sk#2, cs_sales_price#4, cs_sold_date_sk#5, cr_refunded_cash#9, w_state#12]
 Input [7]: [cs_warehouse_sk#1, cs_item_sk#2, cs_sales_price#4, cs_sold_date_sk#5, cr_refunded_cash#9, w_warehouse_sk#11, w_state#12]
 
-(20) Scan parquet default.item
+(20) Scan parquet spark_catalog.default.item
 Output [3]: [i_item_sk#13, i_item_id#14, i_current_price#15]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/item]
@@ -144,6 +146,7 @@ Arguments: HashedRelationBroadcastMode(List(cast(input[0, int, true] as bigint))
 (25) BroadcastHashJoin [codegen id : 8]
 Left keys [1]: [cs_item_sk#2]
 Right keys [1]: [i_item_sk#13]
+Join type: Inner
 Join condition: None
 
 (26) Project [codegen id : 8]
@@ -156,6 +159,7 @@ Output [2]: [d_date_sk#16, d_date#17]
 (28) BroadcastHashJoin [codegen id : 8]
 Left keys [1]: [cs_sold_date_sk#5]
 Right keys [1]: [d_date_sk#16]
+Join type: Inner
 Join condition: None
 
 (29) Project [codegen id : 8]
@@ -165,7 +169,7 @@ Input [7]: [cs_sales_price#4, cs_sold_date_sk#5, cr_refunded_cash#9, w_state#12,
 (30) HashAggregate [codegen id : 8]
 Input [5]: [cs_sales_price#4, cr_refunded_cash#9, w_state#12, i_item_id#14, d_date#17]
 Keys [2]: [w_state#12, i_item_id#14]
-Functions [2]: [partial_sum(CASE WHEN (d_date#17 < 2000-03-11) THEN CheckOverflow((promote_precision(cast(cs_sales_price#4 as decimal(13,2))) - promote_precision(cast(coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00) as decimal(13,2)))), DecimalType(13,2)) ELSE 0.00 END), partial_sum(CASE WHEN (d_date#17 >= 2000-03-11) THEN CheckOverflow((promote_precision(cast(cs_sales_price#4 as decimal(13,2))) - promote_precision(cast(coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00) as decimal(13,2)))), DecimalType(13,2)) ELSE 0.00 END)]
+Functions [2]: [partial_sum(CASE WHEN (d_date#17 < 2000-03-11) THEN (cs_sales_price#4 - coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00)) ELSE 0.00 END), partial_sum(CASE WHEN (d_date#17 >= 2000-03-11) THEN (cs_sales_price#4 - coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00)) ELSE 0.00 END)]
 Aggregate Attributes [4]: [sum#18, isEmpty#19, sum#20, isEmpty#21]
 Results [6]: [w_state#12, i_item_id#14, sum#22, isEmpty#23, sum#24, isEmpty#25]
 
@@ -176,9 +180,9 @@ Arguments: hashpartitioning(w_state#12, i_item_id#14, 5), ENSURE_REQUIREMENTS, [
 (32) HashAggregate [codegen id : 9]
 Input [6]: [w_state#12, i_item_id#14, sum#22, isEmpty#23, sum#24, isEmpty#25]
 Keys [2]: [w_state#12, i_item_id#14]
-Functions [2]: [sum(CASE WHEN (d_date#17 < 2000-03-11) THEN CheckOverflow((promote_precision(cast(cs_sales_price#4 as decimal(13,2))) - promote_precision(cast(coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00) as decimal(13,2)))), DecimalType(13,2)) ELSE 0.00 END), sum(CASE WHEN (d_date#17 >= 2000-03-11) THEN CheckOverflow((promote_precision(cast(cs_sales_price#4 as decimal(13,2))) - promote_precision(cast(coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00) as decimal(13,2)))), DecimalType(13,2)) ELSE 0.00 END)]
-Aggregate Attributes [2]: [sum(CASE WHEN (d_date#17 < 2000-03-11) THEN CheckOverflow((promote_precision(cast(cs_sales_price#4 as decimal(13,2))) - promote_precision(cast(coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00) as decimal(13,2)))), DecimalType(13,2)) ELSE 0.00 END)#26, sum(CASE WHEN (d_date#17 >= 2000-03-11) THEN CheckOverflow((promote_precision(cast(cs_sales_price#4 as decimal(13,2))) - promote_precision(cast(coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00) as decimal(13,2)))), DecimalType(13,2)) ELSE 0.00 END)#27]
-Results [4]: [w_state#12, i_item_id#14, sum(CASE WHEN (d_date#17 < 2000-03-11) THEN CheckOverflow((promote_precision(cast(cs_sales_price#4 as decimal(13,2))) - promote_precision(cast(coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00) as decimal(13,2)))), DecimalType(13,2)) ELSE 0.00 END)#26 AS sales_before#28, sum(CASE WHEN (d_date#17 >= 2000-03-11) THEN CheckOverflow((promote_precision(cast(cs_sales_price#4 as decimal(13,2))) - promote_precision(cast(coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00) as decimal(13,2)))), DecimalType(13,2)) ELSE 0.00 END)#27 AS sales_after#29]
+Functions [2]: [sum(CASE WHEN (d_date#17 < 2000-03-11) THEN (cs_sales_price#4 - coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00)) ELSE 0.00 END), sum(CASE WHEN (d_date#17 >= 2000-03-11) THEN (cs_sales_price#4 - coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00)) ELSE 0.00 END)]
+Aggregate Attributes [2]: [sum(CASE WHEN (d_date#17 < 2000-03-11) THEN (cs_sales_price#4 - coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00)) ELSE 0.00 END)#26, sum(CASE WHEN (d_date#17 >= 2000-03-11) THEN (cs_sales_price#4 - coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00)) ELSE 0.00 END)#27]
+Results [4]: [w_state#12, i_item_id#14, sum(CASE WHEN (d_date#17 < 2000-03-11) THEN (cs_sales_price#4 - coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00)) ELSE 0.00 END)#26 AS sales_before#28, sum(CASE WHEN (d_date#17 >= 2000-03-11) THEN (cs_sales_price#4 - coalesce(cast(cr_refunded_cash#9 as decimal(12,2)), 0.00)) ELSE 0.00 END)#27 AS sales_after#29]
 
 (33) TakeOrderedAndProject
 Input [4]: [w_state#12, i_item_id#14, sales_before#28, sales_after#29]
@@ -190,10 +194,10 @@ Subquery:1 Hosting operator id = 1 Hosting Expression = cs_sold_date_sk#5 IN dyn
 BroadcastExchange (37)
 +- * Filter (36)
    +- * ColumnarToRow (35)
-      +- Scan parquet default.date_dim (34)
+      +- Scan parquet spark_catalog.default.date_dim (34)
 
 
-(34) Scan parquet default.date_dim
+(34) Scan parquet spark_catalog.default.date_dim
 Output [2]: [d_date_sk#16, d_date#17]
 Batched: true
 Location [not included in comparison]/{warehouse_dir}/date_dim]

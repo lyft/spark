@@ -367,6 +367,9 @@ object functions {
    */
   def collect_set(columnName: String): Column = collect_set(Column(columnName))
 
+  private[spark] def collect_top_k(e: Column, num: Int, reverse: Boolean): Column =
+    withAggregateFunction { CollectTopK(e.expr, num, reverse) }
+
   /**
    * Aggregate function: returns the Pearson Correlation Coefficient for two columns.
    *
@@ -671,6 +674,14 @@ object functions {
   def last(columnName: String): Column = last(Column(columnName), ignoreNulls = false)
 
   /**
+   * Aggregate function: returns the most frequent value in a group.
+   *
+   * @group agg_funcs
+   * @since 3.4.0
+   */
+  def mode(e: Column): Column = withAggregateFunction { Mode(e.expr) }
+
+  /**
    * Aggregate function: returns the maximum value of the expression in a group.
    *
    * @group agg_funcs
@@ -711,6 +722,14 @@ object functions {
    * @since 1.4.0
    */
   def mean(columnName: String): Column = avg(columnName)
+
+  /**
+   * Aggregate function: returns the median of the values in a group.
+   *
+   * @group agg_funcs
+   * @since 3.4.0
+   */
+  def median(e: Column): Column = withAggregateFunction { Median(e.expr) }
 
   /**
    * Aggregate function: returns the minimum value of the expression in a group.
@@ -2550,7 +2569,7 @@ object functions {
   /**
    * Calculates the hash code of given columns using the 64-bit
    * variant of the xxHash algorithm, and returns the result as a long
-   * column.
+   * column. The hash computation uses an initial seed of 42.
    *
    * @group misc_funcs
    * @since 3.0.0
@@ -3759,6 +3778,23 @@ object functions {
   }
 
   /**
+   * Extracts the event time from the window column.
+   *
+   * The window column is of StructType { start: Timestamp, end: Timestamp } where start is
+   * inclusive and end is exclusive. Since event time can support microsecond precision,
+   * window_time(window) = window.end - 1 microsecond.
+   *
+   * @param windowColumn The window column (typically produced by window aggregation) of type
+   *                     StructType { start: Timestamp, end: Timestamp }
+   *
+   * @group datetime_funcs
+   * @since 3.4.0
+   */
+  def window_time(windowColumn: Column): Column = withExpr {
+    WindowTime(windowColumn.expr)
+  }
+
+  /**
    * Generates session window given a timestamp specifying column.
    *
    * Session window is one of dynamic windows, which means the length of window is varying
@@ -3826,7 +3862,8 @@ object functions {
   }
 
   /**
-   * Creates timestamp from the number of seconds since UTC epoch.
+   * Converts the number of seconds from the Unix epoch (1970-01-01T00:00:00Z)
+   * to a timestamp.
    * @group datetime_funcs
    * @since 3.1.0
    */
@@ -3846,6 +3883,18 @@ object functions {
   def array_contains(column: Column, value: Any): Column = withExpr {
     ArrayContains(column.expr, lit(value).expr)
   }
+
+  /**
+   * Returns an ARRAY containing all elements from the source ARRAY as well as the new element.
+   * The new element/column is located at end of the ARRAY.
+   *
+   * @group collection_funcs
+   * @since 3.4.0
+   */
+  def array_append(column: Column, element: Any): Column = withExpr {
+    ArrayAppend(column.expr, lit(element).expr)
+  }
+
 
   /**
    * Returns `true` if `a1` and `a2` have at least one non-null element in common. If not and both
@@ -3942,6 +3991,17 @@ object functions {
   }
 
   /**
+   * Returns element of array at given (0-based) index. If the index points
+   * outside of the array boundaries, then this function returns NULL.
+   *
+   * @group collection_funcs
+   * @since 3.4.0
+   */
+  def get(column: Column, index: Column): Column = withExpr {
+    new Get(column.expr, index.expr)
+  }
+
+  /**
    * Sorts the input array in ascending order. The elements of the input array must be orderable.
    * NaN is greater than any non-NaN elements for double/float type.
    * Null elements will be placed at the end of the returned array.
@@ -3952,6 +4012,19 @@ object functions {
   def array_sort(e: Column): Column = withExpr { new ArraySort(e.expr) }
 
   /**
+   * Sorts the input array based on the given comparator function. The comparator will take two
+   * arguments representing two elements of the array. It returns a negative integer, 0, or a
+   * positive integer as the first element is less than, equal to, or greater than the second
+   * element. If the comparator function returns null, the function will fail and raise an error.
+   *
+   * @group collection_funcs
+   * @since 3.4.0
+   */
+  def array_sort(e: Column, comparator: (Column, Column) => Column): Column = withExpr {
+    new ArraySort(e.expr, createLambda(comparator))
+  }
+
+  /**
    * Remove all elements that equal to element from the given array.
    *
    * @group collection_funcs
@@ -3959,6 +4032,16 @@ object functions {
    */
   def array_remove(column: Column, element: Any): Column = withExpr {
     ArrayRemove(column.expr, lit(element).expr)
+  }
+
+  /**
+   * Remove all null elements from the given array.
+   *
+   * @group collection_funcs
+   * @since 3.4.0
+   */
+  def array_compact(column: Column): Column = withExpr {
+    ArrayCompact(column.expr)
   }
 
   /**
@@ -3977,6 +4060,16 @@ object functions {
    */
   def array_intersect(col1: Column, col2: Column): Column = withExpr {
     ArrayIntersect(col1.expr, col2.expr)
+  }
+
+  /**
+   * Adds an item into a given array at a specified position
+   *
+   * @group collection_funcs
+   * @since 3.4.0
+   */
+  def array_insert(arr: Column, pos: Column, value: Column): Column = withExpr {
+    ArrayInsert(arr.expr, pos.expr, value.expr)
   }
 
   /**
@@ -4301,6 +4394,23 @@ object functions {
    */
   def posexplode_outer(e: Column): Column = withExpr { GeneratorOuter(PosExplode(e.expr)) }
 
+   /**
+   * Creates a new row for each element in the given array of structs.
+   *
+   * @group collection_funcs
+   * @since 3.4.0
+   */
+  def inline(e: Column): Column = withExpr { Inline(e.expr) }
+
+  /**
+   * Creates a new row for each element in the given array of structs.
+   * Unlike inline, if the array is null or empty then null is produced for each nested column.
+   *
+   * @group collection_funcs
+   * @since 3.4.0
+   */
+  def inline_outer(e: Column): Column = withExpr { GeneratorOuter(Inline(e.expr)) }
+
   /**
    * Extracts json object from a json string based on json path specified, and returns json string
    * of the extracted json object. It will return null if the input json string is invalid.
@@ -4485,7 +4595,6 @@ object functions {
     val dataType = parseTypeWithFallback(
       schema,
       DataType.fromJson,
-      "Cannot parse the schema in JSON format: ",
       fallbackParser = DataType.fromDDL)
     from_json(e, dataType, options)
   }
@@ -5498,5 +5607,14 @@ object functions {
   @scala.annotation.varargs
   def call_udf(udfName: String, cols: Column*): Column = withExpr {
     UnresolvedFunction(udfName, cols.map(_.expr), isDistinct = false)
+  }
+
+  /**
+   * Unwrap UDT data type column into its underlying type.
+   *
+   * @since 3.4.0
+   */
+  def unwrap_udt(column: Column): Column = withExpr {
+    UnwrapUDT(column.expr)
   }
 }

@@ -29,10 +29,8 @@ import org.apache.spark._
 import org.apache.spark.sql.catalyst.util.quietly
 import org.apache.spark.sql.execution.streaming.CreateAtomicTestManager
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.tags.ExtendedRocksDBTest
 import org.apache.spark.util.{ThreadUtils, Utils}
 
-@ExtendedRocksDBTest
 class RocksDBSuite extends SparkFunSuite {
 
   test("RocksDB: get, put, iterator, commit, load") {
@@ -118,7 +116,11 @@ class RocksDBSuite extends SparkFunSuite {
     withDB(remoteDir, conf = conf) { db =>
       // Generate versions without cleaning up
       for (version <- 1 to 50) {
-        db.put(version.toString, version.toString)  // update "1" -> "1", "2" -> "2", ...
+        if (version > 1) {
+          // remove keys we wrote in previous iteration to ensure compaction happens
+          db.remove((version - 1).toString)
+        }
+        db.put(version.toString, version.toString)
         db.commit()
       }
 
@@ -134,7 +136,7 @@ class RocksDBSuite extends SparkFunSuite {
       versionsPresent.foreach { version =>
         db.load(version)
         val data = db.iterator().map(toStr).toSet
-        assert(data === (1L to version).map(_.toString).map(x => x -> x).toSet)
+        assert(data === Set((version.toString, version.toString)))
       }
     }
   }
@@ -237,19 +239,19 @@ class RocksDBSuite extends SparkFunSuite {
       // Save SAME version again with different checkpoint files and load back again to verify
       // whether files were overwritten.
       val cpFiles1_ = Seq(
-        "sst-file1.sst" -> 10, // same SST file as before, should not get copied
+        "sst-file1.sst" -> 10, // same SST file as before, but same version, so should get copied
         "sst-file2.sst" -> 25, // new SST file with same name as before, but different length
         "sst-file3.sst" -> 30, // new SST file
         "other-file1" -> 100, // same non-SST file as before, should not get copied
         "other-file2" -> 210, // new non-SST file with same name as before, but different length
         "other-file3" -> 300, // new non-SST file
-        "archive/00001.log" -> 1000, // same log file as before, should not get copied
+        "archive/00001.log" -> 1000, // same log file as before and version, so should get copied
         "archive/00002.log" -> 2500, // new log file with same name as before, but different length
         "archive/00003.log" -> 3000 // new log file
       )
       saveCheckpointFiles(fileManager, cpFiles1_, version = 1, numKeys = 1001)
-      assert(numRemoteSSTFiles === 4, "shouldn't copy same files again") // 2 old + 2 new SST files
-      assert(numRemoteLogFiles === 4, "shouldn't copy same files again") // 2 old + 2 new log files
+      assert(numRemoteSSTFiles === 5, "shouldn't copy same files again") // 2 old + 3 new SST files
+      assert(numRemoteLogFiles === 5, "shouldn't copy same files again") // 2 old + 3 new log files
       loadAndVerifyCheckpointFiles(fileManager, verificationDir, version = 1, cpFiles1_, 1001)
 
       // Save another version and verify
@@ -259,8 +261,8 @@ class RocksDBSuite extends SparkFunSuite {
         "archive/00004.log" -> 4000
       )
       saveCheckpointFiles(fileManager, cpFiles2, version = 2, numKeys = 1501)
-      assert(numRemoteSSTFiles === 5) // 1 new file over earlier 4 files
-      assert(numRemoteLogFiles === 5) // 1 new file over earlier 4 files
+      assert(numRemoteSSTFiles === 6) // 1 new file over earlier 5 files
+      assert(numRemoteLogFiles === 6) // 1 new file over earlier 5 files
       loadAndVerifyCheckpointFiles(fileManager, verificationDir, version = 2, cpFiles2, 1501)
 
       // Loading an older version should work
@@ -470,6 +472,55 @@ class RocksDBSuite extends SparkFunSuite {
         assert(metrics.nativeOpsHistograms("compaction").count > 0)
         assert(metrics.nativeOpsMetrics("totalBytesReadByCompaction") > 0)
         assert(metrics.nativeOpsMetrics("totalBytesWrittenByCompaction") > 0)
+      }
+    }
+  }
+
+  // Add tests to check valid and invalid values for max_open_files passed to the underlying
+  // RocksDB instance.
+  Seq("-1", "100", "1000").foreach { maxOpenFiles =>
+    test(s"SPARK-39781: adding valid max_open_files=$maxOpenFiles config property " +
+      "for RocksDB state store instance should succeed") {
+      withTempDir { dir =>
+        val sqlConf = SQLConf.get
+        sqlConf.setConfString("spark.sql.streaming.stateStore.rocksdb.maxOpenFiles", maxOpenFiles)
+        val dbConf = RocksDBConf(StateStoreConf(sqlConf))
+        assert(dbConf.maxOpenFiles === maxOpenFiles.toInt)
+
+        val remoteDir = dir.getCanonicalPath
+        withDB(remoteDir, conf = dbConf) { db =>
+          // Do some DB ops
+          db.load(0)
+          db.put("a", "1")
+          db.commit()
+          assert(toStr(db.get("a")) === "1")
+        }
+      }
+    }
+  }
+
+  Seq("test", "true").foreach { maxOpenFiles =>
+    test(s"SPARK-39781: adding invalid max_open_files=$maxOpenFiles config property " +
+      "for RocksDB state store instance should fail") {
+      withTempDir { dir =>
+        val ex = intercept[IllegalArgumentException] {
+          val sqlConf = SQLConf.get
+          sqlConf.setConfString("spark.sql.streaming.stateStore.rocksdb.maxOpenFiles",
+            maxOpenFiles)
+          val dbConf = RocksDBConf(StateStoreConf(sqlConf))
+          assert(dbConf.maxOpenFiles === maxOpenFiles.toInt)
+
+          val remoteDir = dir.getCanonicalPath
+          withDB(remoteDir, conf = dbConf) { db =>
+            // Do some DB ops
+            db.load(0)
+            db.put("a", "1")
+            db.commit()
+            assert(toStr(db.get("a")) === "1")
+          }
+        }
+        assert(ex.getMessage.contains("Invalid value for"))
+        assert(ex.getMessage.contains("must be an integer"))
       }
     }
   }

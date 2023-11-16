@@ -89,21 +89,33 @@ class DataSourceV2StrategySuite extends PlanTest with SharedSparkSession {
     .foreach { case ((attrInt, intColName), (attrStr, strColName)) =>
       testTranslateFilter(EqualTo(attrInt, 1),
         Some(new Predicate("=", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
+      testTranslateFilter(EqualTo(1, attrInt),
+        Some(new Predicate("=", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
 
       testTranslateFilter(EqualNullSafe(attrInt, 1),
+        Some(new Predicate("<=>", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
+      testTranslateFilter(EqualNullSafe(1, attrInt),
         Some(new Predicate("<=>", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
 
       testTranslateFilter(GreaterThan(attrInt, 1),
         Some(new Predicate(">", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
+      testTranslateFilter(GreaterThan(1, attrInt),
+        Some(new Predicate("<", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
 
       testTranslateFilter(LessThan(attrInt, 1),
         Some(new Predicate("<", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
+      testTranslateFilter(LessThan(1, attrInt),
+        Some(new Predicate(">", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
 
       testTranslateFilter(GreaterThanOrEqual(attrInt, 1),
         Some(new Predicate(">=", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
+      testTranslateFilter(GreaterThanOrEqual(1, attrInt),
+        Some(new Predicate("<=", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
 
       testTranslateFilter(LessThanOrEqual(attrInt, 1),
         Some(new Predicate("<=", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
+      testTranslateFilter(LessThanOrEqual(1, attrInt),
+        Some(new Predicate(">=", Array(FieldReference(intColName), LiteralValue(1, IntegerType)))))
 
       testTranslateFilter(IsNull(attrInt),
         Some(new Predicate("IS_NULL", Array(FieldReference(intColName)))))

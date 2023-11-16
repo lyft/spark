@@ -229,6 +229,10 @@ public class UTF8StringSuite {
     assertEquals(fromString("1"), fromString("1").trim());
     assertEquals(fromString("1"), fromString("1\t").trimAll());
 
+    assertEquals(fromString("1中文").toString(), fromString("1中文").trimAll().toString());
+    assertEquals(fromString("1"), fromString("1\u0003").trimAll());
+    assertEquals(fromString("1"), fromString("1\u007F").trimAll());
+
     assertEquals(fromString("hello"), fromString("  hello ").trim());
     assertEquals(fromString("hello "), fromString("  hello ").trimLeft());
     assertEquals(fromString("  hello"), fromString("  hello ").trimRight());
@@ -409,6 +413,25 @@ public class UTF8StringSuite {
     assertArrayEquals(
       new UTF8String[]{fromString("ab"), fromString("def,ghi,")},
       fromString("ab,def,ghi,").split(fromString(","), 2));
+    // Split with empty pattern ignores trailing empty spaces.
+    assertArrayEquals(
+      new UTF8String[]{fromString("a"), fromString("b")},
+      fromString("ab").split(fromString(""), 0));
+    assertArrayEquals(
+      new UTF8String[]{fromString("a"), fromString("b")},
+      fromString("ab").split(fromString(""), -1));
+    assertArrayEquals(
+      new UTF8String[]{fromString("a"), fromString("b")},
+      fromString("ab").split(fromString(""), 2));
+    assertArrayEquals(
+      new UTF8String[]{fromString("a"), fromString("b")},
+      fromString("ab").split(fromString(""), 100));
+    assertArrayEquals(
+      new UTF8String[]{fromString("a")},
+      fromString("ab").split(fromString(""), 1));
+    assertArrayEquals(
+      new UTF8String[]{fromString("")},
+      fromString("").split(fromString(""), 0));
   }
 
   @Test
@@ -613,12 +636,8 @@ public class UTF8StringSuite {
 
     for (final long offset : offsets) {
       try {
-        fromAddress(test, BYTE_ARRAY_OFFSET + offset, test.length)
-            .writeTo(outputStream);
-
-        throw new IllegalStateException(Long.toString(offset));
-      } catch (ArrayIndexOutOfBoundsException e) {
-        // ignore
+        assertThrows(ArrayIndexOutOfBoundsException.class,
+          () -> fromAddress(test, BYTE_ARRAY_OFFSET + offset, test.length).writeTo(outputStream));
       } finally {
         outputStream.reset();
       }

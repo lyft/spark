@@ -119,7 +119,8 @@ case class AddColumns(
         col.dataType,
         col.nullable,
         col.comment.orNull,
-        col.position.map(_.position).orNull)
+        col.position.map(_.position).orNull,
+        col.getV2Default)
     }
   }
 
@@ -154,7 +155,8 @@ case class ReplaceColumns(
         col.dataType,
         col.nullable,
         col.comment.orNull,
-        null)
+        null,
+        col.getV2Default)
     }
     deleteChanges ++ addChanges
   }
@@ -206,7 +208,8 @@ case class AlterColumn(
     dataType: Option[DataType],
     nullable: Option[Boolean],
     comment: Option[String],
-    position: Option[FieldPosition]) extends AlterTableCommand {
+    position: Option[FieldPosition],
+    setDefaultExpression: Option[String]) extends AlterTableCommand {
   override def changes: Seq[TableChange] = {
     require(column.resolved, "FieldName should be resolved before it's converted to TableChange.")
     val colName = column.name.toArray
@@ -224,7 +227,10 @@ case class AlterColumn(
         "FieldPosition should be resolved before it's converted to TableChange.")
       TableChange.updateColumnPosition(colName, newPosition.position)
     }
-    typeChange.toSeq ++ nullabilityChange ++ commentChange ++ positionChange
+    val defaultValueChange = setDefaultExpression.map { newDefaultExpression =>
+      TableChange.updateColumnDefaultValue(colName, newDefaultExpression)
+    }
+    typeChange.toSeq ++ nullabilityChange ++ commentChange ++ positionChange ++ defaultValueChange
   }
 
   override protected def withNewChildInternal(newChild: LogicalPlan): LogicalPlan =

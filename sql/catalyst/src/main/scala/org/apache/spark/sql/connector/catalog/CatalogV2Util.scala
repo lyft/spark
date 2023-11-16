@@ -22,12 +22,17 @@ import java.util.Collections
 
 import scala.collection.JavaConverters._
 
+import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.analysis.{AsOfTimestamp, AsOfVersion, NamedRelation, NoSuchDatabaseException, NoSuchFunctionException, NoSuchNamespaceException, NoSuchTableException, TimeTravelSpec}
+import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.catalyst.plans.logical.{SerdeInfo, TableSpec}
+import org.apache.spark.sql.catalyst.util.GeneratedColumn
+import org.apache.spark.sql.catalyst.util.ResolveDefaultColumns._
 import org.apache.spark.sql.connector.catalog.TableChange._
 import org.apache.spark.sql.connector.catalog.functions.UnboundFunction
+import org.apache.spark.sql.connector.expressions.LiteralValue
 import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Relation
-import org.apache.spark.sql.types.{ArrayType, MapType, StructField, StructType}
+import org.apache.spark.sql.types.{ArrayType, MapType, Metadata, MetadataBuilder, StructField, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.util.Utils
 
@@ -130,23 +135,32 @@ private[sql] object CatalogV2Util {
   /**
    * Apply schema changes to a schema and return the result.
    */
-  def applySchemaChanges(schema: StructType, changes: Seq[TableChange]): StructType = {
+  def applySchemaChanges(
+      schema: StructType,
+      changes: Seq[TableChange],
+      tableProvider: Option[String],
+      statementType: String): StructType = {
     changes.foldLeft(schema) { (schema, change) =>
       change match {
         case add: AddColumn =>
           add.fieldNames match {
             case Array(name) =>
               val field = StructField(name, add.dataType, nullable = add.isNullable)
-              val newField = Option(add.comment).map(field.withComment).getOrElse(field)
-              addField(schema, newField, add.position())
-
+              val fieldWithDefault: StructField = encodeDefaultValue(add.defaultValue(), field)
+              val fieldWithComment: StructField =
+                Option(add.comment).map(fieldWithDefault.withComment).getOrElse(fieldWithDefault)
+              addField(schema, fieldWithComment, add.position(), tableProvider, statementType, true)
             case names =>
               replace(schema, names.init, parent => parent.dataType match {
                 case parentType: StructType =>
                   val field = StructField(names.last, add.dataType, nullable = add.isNullable)
-                  val newField = Option(add.comment).map(field.withComment).getOrElse(field)
-                  Some(parent.copy(dataType = addField(parentType, newField, add.position())))
-
+                  val fieldWithDefault: StructField = encodeDefaultValue(add.defaultValue(), field)
+                  val fieldWithComment: StructField =
+                    Option(add.comment).map(fieldWithDefault.withComment)
+                      .getOrElse(fieldWithDefault)
+                  Some(parent.copy(dataType =
+                    addField(parentType, fieldWithComment, add.position(), tableProvider,
+                      statementType, true)))
                 case _ =>
                   throw new IllegalArgumentException(s"Not a struct: ${names.init.last}")
               })
@@ -176,7 +190,8 @@ private[sql] object CatalogV2Util {
               throw new IllegalArgumentException("Field not found: " + name)
             }
             val withFieldRemoved = StructType(struct.fields.filter(_ != oldField))
-            addField(withFieldRemoved, oldField, update.position())
+            addField(withFieldRemoved, oldField, update.position(), tableProvider, statementType,
+              false)
           }
 
           update.fieldNames() match {
@@ -191,6 +206,18 @@ private[sql] object CatalogV2Util {
               })
           }
 
+        case update: UpdateColumnDefaultValue =>
+          replace(schema, update.fieldNames, field =>
+            // The new DEFAULT value string will be non-empty for any DDL commands that set the
+            // default value, such as "ALTER TABLE t ALTER COLUMN c SET DEFAULT ..." (this is
+            // enforced by the parser). On the other hand, commands that drop the default value such
+            // as "ALTER TABLE t ALTER COLUMN c DROP DEFAULT" will set this string to empty.
+            if (update.newDefaultValue().nonEmpty) {
+              Some(field.withCurrentDefaultValue(update.newDefaultValue()))
+            } else {
+              Some(field.clearCurrentDefaultValue)
+            })
+
         case delete: DeleteColumn =>
           replace(schema, delete.fieldNames, _ => None, delete.ifExists)
 
@@ -204,8 +231,11 @@ private[sql] object CatalogV2Util {
   private def addField(
       schema: StructType,
       field: StructField,
-      position: ColumnPosition): StructType = {
-    if (position == null) {
+      position: ColumnPosition,
+      tableProvider: Option[String],
+      statementType: String,
+      addNewColumnToExistingTable: Boolean): StructType = {
+    val newSchema: StructType = if (position == null) {
       schema.add(field)
     } else if (position.isInstanceOf[First]) {
       StructType(field +: schema.fields)
@@ -218,6 +248,9 @@ private[sql] object CatalogV2Util {
       val (before, after) = schema.fields.splitAt(fieldIndex + 1)
       StructType(before ++ (field +: after))
     }
+    validateTableProviderForDefaultValue(
+      newSchema, tableProvider, statementType, addNewColumnToExistingTable)
+    constantFoldCurrentDefaultsToExistDefaults(newSchema, statementType)
   }
 
   private def replace(
@@ -300,21 +333,28 @@ private[sql] object CatalogV2Util {
       ident: Identifier,
       timeTravelSpec: Option[TimeTravelSpec] = None): Option[Table] =
     try {
-      if (timeTravelSpec.nonEmpty) {
-        timeTravelSpec.get match {
-          case v: AsOfVersion =>
-            Option(catalog.asTableCatalog.loadTable(ident, v.version))
-          case ts: AsOfTimestamp =>
-            Option(catalog.asTableCatalog.loadTable(ident, ts.timestamp))
-        }
-      } else {
-        Option(catalog.asTableCatalog.loadTable(ident))
-      }
+      Option(getTable(catalog, ident, timeTravelSpec))
     } catch {
       case _: NoSuchTableException => None
       case _: NoSuchDatabaseException => None
       case _: NoSuchNamespaceException => None
     }
+
+  def getTable(
+      catalog: CatalogPlugin,
+      ident: Identifier,
+      timeTravelSpec: Option[TimeTravelSpec] = None): Table = {
+    if (timeTravelSpec.nonEmpty) {
+      timeTravelSpec.get match {
+        case v: AsOfVersion =>
+          catalog.asTableCatalog.loadTable(ident, v.version)
+        case ts: AsOfTimestamp =>
+          catalog.asTableCatalog.loadTable(ident, ts.timestamp)
+      }
+    } else {
+      catalog.asTableCatalog.loadTable(ident)
+    }
+  }
 
   def loadFunction(catalog: CatalogPlugin, ident: Identifier): Option[UnboundFunction] = {
     try {
@@ -393,5 +433,103 @@ private[sql] object CatalogV2Util {
       .map(catalogManager.catalog)
       .getOrElse(catalogManager.v2SessionCatalog)
       .asTableCatalog
+  }
+
+  /**
+   * Converts DS v2 columns to StructType, which encodes column comment and default value to
+   * StructField metadata. This is mainly used to define the schema of v2 scan, w.r.t. the columns
+   * of the v2 table.
+   */
+  def v2ColumnsToStructType(columns: Array[Column]): StructType = {
+    StructType(columns.map(v2ColumnToStructField))
+  }
+
+  private def v2ColumnToStructField(col: Column): StructField = {
+    val metadata = Option(col.metadataInJSON()).map(Metadata.fromJson).getOrElse(Metadata.empty)
+    var f = StructField(col.name(), col.dataType(), col.nullable(), metadata)
+    Option(col.comment()).foreach { comment =>
+      f = f.withComment(comment)
+    }
+    Option(col.defaultValue()).foreach { default =>
+      f = encodeDefaultValue(default, f)
+    }
+    f
+  }
+
+  // For built-in file sources, we encode the default value in StructField metadata. An analyzer
+  // rule will check the special metadata and change the DML input plan to fill the default value.
+  private def encodeDefaultValue(defaultValue: ColumnDefaultValue, f: StructField): StructField = {
+    Option(defaultValue).map { default =>
+      // The "exist default" is used to back-fill the existing data when new columns are added, and
+      // should be a fixed value which was evaluated at the definition time. For example, if the
+      // default value is `current_date()`, the "exist default" should be the value of
+      // `current_date()` when the column was defined/altered, instead of when back-fall happens.
+      // Note: the back-fill here is a logical concept. The data source can keep the existing
+      //       data unchanged and let the data reader to return "exist default" for missing
+      //       columns.
+      val existingDefault = Literal(default.getValue.value(), default.getValue.dataType()).sql
+      f.withExistenceDefaultValue(existingDefault).withCurrentDefaultValue(default.getSql)
+    }.getOrElse(f)
+  }
+
+  /**
+   * Converts a StructType to DS v2 columns, which decodes the StructField metadata to v2 column
+   * comment and default value or generation expression. This is mainly used to generate DS v2
+   * columns from table schema in DDL commands, so that Spark can pass DS v2 columns to DS v2
+   * createTable and related APIs.
+   */
+  def structTypeToV2Columns(schema: StructType): Array[Column] = {
+    schema.fields.map(structFieldToV2Column)
+  }
+
+  private def structFieldToV2Column(f: StructField): Column = {
+    def metadataAsJson(metadata: Metadata): String = {
+      if (metadata == Metadata.empty) {
+        null
+      } else {
+        metadata.json
+      }
+    }
+    def metadataWithKeysRemoved(keys: Seq[String]): Metadata = {
+      keys.foldLeft(new MetadataBuilder().withMetadata(f.metadata)) {
+        (builder, key) => builder.remove(key)
+      }.build()
+    }
+
+    val isDefaultColumn = f.getCurrentDefaultValue().isDefined &&
+      f.getExistenceDefaultValue().isDefined
+    val isGeneratedColumn = GeneratedColumn.isGeneratedColumn(f)
+    if (isDefaultColumn && isGeneratedColumn) {
+      throw new AnalysisException(
+        errorClass = "GENERATED_COLUMN_WITH_DEFAULT_VALUE",
+        messageParameters = Map(
+          "colName" -> f.name,
+          "defaultValue" -> f.getCurrentDefaultValue().get,
+          "genExpr" -> GeneratedColumn.getGenerationExpression(f).get
+        )
+      )
+    }
+
+    if (isDefaultColumn) {
+      val e = analyze(f, EXISTS_DEFAULT_COLUMN_METADATA_KEY)
+      assert(e.resolved && e.foldable,
+        "The existence default value must be a simple SQL string that is resolved and foldable, " +
+          "but got: " + f.getExistenceDefaultValue().get)
+      val defaultValue = new ColumnDefaultValue(
+        f.getCurrentDefaultValue().get, LiteralValue(e.eval(), f.dataType))
+      val cleanedMetadata = metadataWithKeysRemoved(
+        Seq("comment", CURRENT_DEFAULT_COLUMN_METADATA_KEY, EXISTS_DEFAULT_COLUMN_METADATA_KEY))
+      Column.create(f.name, f.dataType, f.nullable, f.getComment().orNull, defaultValue,
+        metadataAsJson(cleanedMetadata))
+    } else if (isGeneratedColumn) {
+      val cleanedMetadata = metadataWithKeysRemoved(
+        Seq("comment", GeneratedColumn.GENERATION_EXPRESSION_METADATA_KEY))
+      Column.create(f.name, f.dataType, f.nullable, f.getComment().orNull,
+        GeneratedColumn.getGenerationExpression(f).get, metadataAsJson(cleanedMetadata))
+    } else {
+      val cleanedMetadata = metadataWithKeysRemoved(Seq("comment"))
+      Column.create(f.name, f.dataType, f.nullable, f.getComment().orNull,
+        metadataAsJson(cleanedMetadata))
+    }
   }
 }

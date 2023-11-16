@@ -220,47 +220,6 @@ public class TransportConf {
   }
 
   /**
-   * The key generation algorithm. This should be an algorithm that accepts a "PBEKeySpec"
-   * as input. The default value (PBKDF2WithHmacSHA1) is available in Java 7.
-   */
-  public String keyFactoryAlgorithm() {
-    return conf.get("spark.network.crypto.keyFactoryAlgorithm", "PBKDF2WithHmacSHA1");
-  }
-
-  /**
-   * How many iterations to run when generating keys.
-   *
-   * See some discussion about this at: http://security.stackexchange.com/q/3959
-   * The default value was picked for speed, since it assumes that the secret has good entropy
-   * (128 bits by default), which is not generally the case with user passwords.
-   */
-  public int keyFactoryIterations() {
-    return conf.getInt("spark.network.crypto.keyFactoryIterations", 1024);
-  }
-
-  /**
-   * Encryption key length, in bits.
-   */
-  public int encryptionKeyLength() {
-    return conf.getInt("spark.network.crypto.keyLength", 128);
-  }
-
-  /**
-   * Initial vector length, in bytes.
-   */
-  public int ivLength() {
-    return conf.getInt("spark.network.crypto.ivLength", 16);
-  }
-
-  /**
-   * The algorithm for generated secret keys. Nobody should really need to change this,
-   * but configurable just in case.
-   */
-  public String keyAlgorithm() {
-    return conf.get("spark.network.crypto.keyAlgorithm", "AES");
-  }
-
-  /**
    * Whether to fall back to SASL if the new auth protocol fails. Enabled by default for
    * backwards compatibility.
    */
@@ -374,6 +333,13 @@ public class TransportConf {
     return conf.getBoolean("spark.shuffle.useOldFetchProtocol", false);
   }
 
+  /** Whether to enable sasl retries or not. The number of retries is dictated by the config
+   * `spark.shuffle.io.maxRetries`.
+   */
+  public boolean enableSaslRetries() {
+    return conf.getBoolean("spark.shuffle.sasl.enableRetries", false);
+  }
+
   /**
    * Class name of the implementation of MergedShuffleFileManager that merges the blocks
    * pushed to it when push-based shuffle is enabled. By default, push-based shuffle is disabled at
@@ -426,5 +392,14 @@ public class TransportConf {
    */
   public int ioExceptionsThresholdDuringMerge() {
     return conf.getInt("spark.shuffle.push.server.ioExceptionsThresholdDuringMerge", 4);
+  }
+
+  /**
+   * The RemoteBlockPushResolver#mergedShuffleCleanermergedShuffleCleaner
+   * shutdown timeout, in seconds.
+   */
+  public long mergedShuffleCleanerShutdownTimeout() {
+    return JavaUtils.timeStringAsSec(
+      conf.get("spark.shuffle.push.server.mergedShuffleCleaner.shutdown.timeout", "60s"));
   }
 }

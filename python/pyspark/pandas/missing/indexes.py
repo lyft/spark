@@ -36,8 +36,8 @@ def _unsupported_property(property_name, deprecated=False, reason="", cls="Index
 
 
 class MissingPandasLikeIndex:
-    # NOTE: Please update the document "Supported pandas APIs" when implementing the new API.
-    # Documentation path: `python/docs/source/user_guide/pandas_on_spark/supported_pandas_api.rst`.
+    # NOTE: Please update the pandas-on-Spark reference document when implementing the new API.
+    # Documentation path: `python/docs/source/reference/pyspark.pandas/`.
 
     # Properties
     nbytes = _unsupported_property("nbytes")
@@ -51,7 +51,6 @@ class MissingPandasLikeIndex:
     get_indexer_non_unique = _unsupported_function("get_indexer_non_unique")
     get_loc = _unsupported_function("get_loc")
     get_slice_bound = _unsupported_function("get_slice_bound")
-    get_value = _unsupported_function("get_value")
     groupby = _unsupported_function("groupby")
     is_ = _unsupported_function("is_")
     join = _unsupported_function("join")
@@ -67,7 +66,6 @@ class MissingPandasLikeIndex:
     is_mixed = _unsupported_function("is_mixed")
 
     # Deprecated functions
-    set_value = _unsupported_function("set_value", deprecated=True)
     to_native_types = _unsupported_function("to_native_types", deprecated=True)
 
     # Properties we won't support.
@@ -80,8 +78,8 @@ class MissingPandasLikeIndex:
 
 
 class MissingPandasLikeDatetimeIndex(MissingPandasLikeIndex):
-    # NOTE: Please update the document "Supported pandas APIs" when implementing the new API.
-    # Documentation path: `python/docs/source/user_guide/pandas_on_spark/supported_pandas_api.rst`.
+    # NOTE: Please update the pandas-on-Spark reference document when implementing the new API.
+    # Documentation path: `python/docs/source/reference/pyspark.pandas/`.
 
     # Properties
     nanosecond = _unsupported_property("nanosecond", cls="DatetimeIndex")
@@ -105,8 +103,8 @@ class MissingPandasLikeDatetimeIndex(MissingPandasLikeIndex):
 
 
 class MissingPandasLikeTimedeltaIndex(MissingPandasLikeIndex):
-    # NOTE: Please update the document "Supported pandas APIs" when implementing the new API.
-    # Documentation path: `python/docs/source/user_guide/pandas_on_spark/supported_pandas_api.rst`.
+    # NOTE: Please update the pandas-on-Spark reference document when implementing the new API.
+    # Documentation path: `python/docs/source/reference/pyspark.pandas/`.
 
     # Properties
     nanoseconds = _unsupported_property("nanoseconds", cls="TimedeltaIndex")
@@ -122,8 +120,8 @@ class MissingPandasLikeTimedeltaIndex(MissingPandasLikeIndex):
 
 
 class MissingPandasLikeMultiIndex:
-    # NOTE: Please update the document "Supported pandas APIs" when implementing the new API.
-    # Documentation path: `python/docs/source/user_guide/pandas_on_spark/supported_pandas_api.rst`.
+    # NOTE: Please update the pandas-on-Spark reference document when implementing the new API.
+    # Documentation path: `python/docs/source/reference/pyspark.pandas/`.
 
     # Functions
     argsort = _unsupported_function("argsort")

@@ -27,7 +27,7 @@ import org.apache.hadoop.fs.{FileContext, FsConstants, Path}
 import org.apache.hadoop.fs.permission.{AclEntry, AclEntryScope, AclEntryType, FsAction, FsPermission}
 
 import org.apache.spark.sql.{Row, SparkSession}
-import org.apache.spark.sql.catalyst.TableIdentifier
+import org.apache.spark.sql.catalyst.{SQLConfHelper, TableIdentifier}
 import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.catalog.CatalogTableType._
@@ -35,7 +35,8 @@ import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.plans.DescribeCommandSchema
 import org.apache.spark.sql.catalyst.plans.logical._
-import org.apache.spark.sql.catalyst.util.{escapeSingleQuotedString, quoteIfNeeded, CaseInsensitiveMap, CharVarcharUtils, DateTimeUtils}
+import org.apache.spark.sql.catalyst.util.{escapeSingleQuotedString, quoteIfNeeded, CaseInsensitiveMap, CharVarcharUtils, DateTimeUtils, ResolveDefaultColumns}
+import org.apache.spark.sql.catalyst.util.ResolveDefaultColumns.CURRENT_DEFAULT_COLUMN_METADATA_KEY
 import org.apache.spark.sql.connector.catalog.CatalogV2Implicits.TableIdentifierHelper
 import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryExecutionErrors}
 import org.apache.spark.sql.execution.datasources.DataSource
@@ -95,10 +96,10 @@ case class CreateTableLikeCommand(
         DataSource.lookupDataSource(provider.get, sparkSession.sessionState.conf)
       }
       provider
-    } else if (sourceTableDesc.tableType == CatalogTableType.VIEW) {
-      Some(sparkSession.sessionState.conf.defaultDataSourceName)
     } else if (fileFormat.inputFormat.isDefined) {
       Some(DDLUtils.HIVE_PROVIDER)
+    } else if (sourceTableDesc.tableType == CatalogTableType.VIEW) {
+      Some(sparkSession.sessionState.conf.defaultDataSourceName)
     } else {
       sourceTableDesc.provider
     }
@@ -230,18 +231,19 @@ case class AlterTableAddColumnsCommand(
   override def run(sparkSession: SparkSession): Seq[Row] = {
     val catalog = sparkSession.sessionState.catalog
     val catalogTable = verifyAlterTableAddColumn(sparkSession.sessionState.conf, catalog, table)
+    val colsWithProcessedDefaults =
+      constantFoldCurrentDefaultsToExistDefaults(sparkSession, catalogTable.provider)
 
     CommandUtils.uncacheTableOrView(sparkSession, table.quotedString)
     catalog.refreshTable(table)
 
     SchemaUtils.checkColumnNameDuplication(
-      (colsToAdd ++ catalogTable.schema).map(_.name),
-      "in the table definition of " + table.identifier,
+      (colsWithProcessedDefaults ++ catalogTable.schema).map(_.name),
       conf.caseSensitiveAnalysis)
-    DDLUtils.checkTableColumns(catalogTable, StructType(colsToAdd))
+    DDLUtils.checkTableColumns(catalogTable, StructType(colsWithProcessedDefaults))
 
     val existingSchema = CharVarcharUtils.getRawSchema(catalogTable.dataSchema)
-    catalog.alterTableDataSchema(table, StructType(existingSchema ++ colsToAdd))
+    catalog.alterTableDataSchema(table, StructType(existingSchema ++ colsWithProcessedDefaults))
     Seq.empty[Row]
   }
 
@@ -276,6 +278,27 @@ case class AlterTableAddColumnsCommand(
       }
     }
     catalogTable
+  }
+
+  /**
+   * ALTER TABLE ADD COLUMNS commands may optionally specify a DEFAULT expression for any column.
+   * In that case, this method evaluates its originally specified value and then stores the result
+   * in a separate column metadata entry, then returns the updated column definitions.
+   */
+  private def constantFoldCurrentDefaultsToExistDefaults(
+      sparkSession: SparkSession, tableProvider: Option[String]): Seq[StructField] = {
+    colsToAdd.map { col: StructField =>
+      if (col.metadata.contains(CURRENT_DEFAULT_COLUMN_METADATA_KEY)) {
+        val schema = StructType(Array(col))
+        ResolveDefaultColumns.validateTableProviderForDefaultValue(
+          schema, tableProvider, "ALTER TABLE ADD COLUMNS", true)
+        val foldedStructType = ResolveDefaultColumns.constantFoldCurrentDefaultsToExistDefaults(
+          schema, "ALTER TABLE ADD COLUMNS")
+        foldedStructType.fields(0)
+      } else {
+        col
+      }
+    }
   }
 }
 
@@ -511,8 +534,8 @@ case class TruncateTableCommand(
                 fs.setPermission(path, permission)
               } catch {
                 case NonFatal(e) =>
-                  throw QueryExecutionErrors.failToSetOriginalPermissionBackError(
-                    permission, path, e)
+                  throw QueryExecutionErrors.cannotRestorePermissionsForPathError(
+                    permission, path)
               }
             }
             optAcls.foreach { acls =>
@@ -625,6 +648,11 @@ case class DescribeTableCommand(
         describeDetailedPartitionInfo(sparkSession, catalog, metadata, result)
       } else if (isExtended) {
         describeFormattedTableInfo(metadata, result)
+      }
+
+      // If any columns have default values, append them to the result.
+      ResolveDefaultColumns.getDescribeMetadata(metadata.schema).foreach { row =>
+        append(result, row._1, row._2, row._3)
       }
     }
 
@@ -745,7 +773,7 @@ case class DescribeColumnCommand(
     val colName = UnresolvedAttribute(colNameParts).name
     val field = {
       relation.resolve(colNameParts, resolver).getOrElse {
-        throw QueryCompilationErrors.columnDoesNotExistError(colName)
+        throw QueryCompilationErrors.columnNotFoundError(colName)
       }
     }
     if (!field.isInstanceOf[Attribute]) {
@@ -788,6 +816,10 @@ case class DescribeColumnCommand(
         hist <- c.histogram
       } yield histogramDescription(hist)
       buffer ++= histDesc.getOrElse(Seq(Row("histogram", "NULL")))
+      val defaultKey = CURRENT_DEFAULT_COLUMN_METADATA_KEY
+      if (field.metadata.contains(defaultKey)) {
+        buffer += Row("default", field.metadata.getString(defaultKey))
+      }
     }
     buffer.toSeq
   }
@@ -908,10 +940,10 @@ case class ShowTablePropertiesCommand(
       Seq.empty[Row]
     } else {
       val catalogTable = catalog.getTableMetadata(table)
+      val properties = conf.redactOptions(catalogTable.properties)
       propertyKey match {
         case Some(p) =>
-          val propValue = catalogTable
-            .properties
+          val propValue = properties
             .getOrElse(p, s"Table ${catalogTable.qualifiedName} does not have property: $p")
           if (output.length == 1) {
             Seq(Row(propValue))
@@ -919,8 +951,8 @@ case class ShowTablePropertiesCommand(
             Seq(Row(p, propValue))
           }
         case None =>
-          catalogTable.properties.filterKeys(!_.startsWith(CatalogTable.VIEW_PREFIX))
-            .toSeq.sortBy(_._1).map(p => Row(p._1, p._2)).toSeq
+          properties.filterKeys(!_.startsWith(CatalogTable.VIEW_PREFIX))
+            .toSeq.sortBy(_._1).map(p => Row(p._1, p._2))
       }
     }
   }
@@ -1008,7 +1040,7 @@ case class ShowPartitionsCommand(
 /**
  * Provides common utilities between `ShowCreateTableCommand` and `ShowCreateTableAsSparkCommand`.
  */
-trait ShowCreateTableCommandBase {
+trait ShowCreateTableCommandBase extends SQLConfHelper {
 
   protected val table: TableIdentifier
 
@@ -1029,9 +1061,11 @@ trait ShowCreateTableCommandBase {
 
   protected def showTableProperties(metadata: CatalogTable, builder: StringBuilder): Unit = {
     if (metadata.properties.nonEmpty) {
-      val props = metadata.properties.toSeq.sortBy(_._1).map { case (key, value) =>
-        s"'${escapeSingleQuotedString(key)}' = '${escapeSingleQuotedString(value)}'"
-      }
+      val props =
+        conf.redactOptions(metadata.properties)
+          .toSeq.sortBy(_._1).map { case (key, value) =>
+          s"'${escapeSingleQuotedString(key)}' = '${escapeSingleQuotedString(value)}'"
+        }
 
       builder ++= "TBLPROPERTIES "
       builder ++= concatByMultiLines(props)
@@ -1320,7 +1354,7 @@ case class ShowCreateTableAsSerdeCommand(
     storage.serde.foreach { serde =>
       builder ++= s"ROW FORMAT SERDE '$serde'\n"
 
-      val serdeProps = conf.redactOptions(metadata.storage.properties).map {
+      val serdeProps = conf.redactOptions(metadata.storage.properties).toSeq.sortBy(_._1).map {
         case (key, value) =>
           s"'${escapeSingleQuotedString(key)}' = '${escapeSingleQuotedString(value)}'"
       }
