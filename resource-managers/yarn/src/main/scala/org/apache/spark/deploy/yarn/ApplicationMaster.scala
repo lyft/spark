@@ -499,7 +499,7 @@ private[spark] class ApplicationMaster(
   }
 
   private def runDriver(): Unit = {
-    addAmIpFilter(None, System.getenv(ApplicationConstants.APPLICATION_WEB_PROXY_BASE_ENV))
+//    addAmIpFilter(None, System.getenv(ApplicationConstants.APPLICATION_WEB_PROXY_BASE_ENV))
     userClassThread = startUserApplication()
 
     // This a bit hacky, but we need to wait until the spark.driver.port property has
@@ -556,8 +556,8 @@ private[spark] class ApplicationMaster(
     val driverRef = rpcEnv.setupEndpointRef(
       RpcAddress(driverHost, driverPort),
       YarnSchedulerBackend.ENDPOINT_NAME)
-    addAmIpFilter(Some(driverRef),
-      System.getenv(ApplicationConstants.APPLICATION_WEB_PROXY_BASE_ENV))
+//    addAmIpFilter(Some(driverRef),
+//      System.getenv(ApplicationConstants.APPLICATION_WEB_PROXY_BASE_ENV))
     createAllocator(driverRef, sparkConf, rpcEnv, appAttemptId, distCacheConf)
 
     // In client mode the actor will stop the reporter thread.
