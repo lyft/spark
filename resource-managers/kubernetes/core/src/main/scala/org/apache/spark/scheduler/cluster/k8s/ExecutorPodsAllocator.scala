@@ -466,12 +466,13 @@ class ExecutorPodsAllocator(
         .build()
       val resources = replacePVCsIfNeeded(
         podWithAttachedContainer, resolvedExecutorSpec.executorKubernetesResources, reusablePVCs)
-      val createdExecutorPod = kubernetesClient.pods().create(podWithAttachedContainer)
-      
+      val createdExecutorPod =
+        kubernetesClient.pods().inNamespace(namespace).resource(podWithAttachedContainer).create()
+
       org.apache.spark.util.LyftUtils.callObjectMethodNoArguments(
           "com.lyft.data.spark.AppMetrics$",
           "setFirstExecutorAllocationTime")
-      
+
       try {
         addOwnerReference(createdExecutorPod, resources)
         resources

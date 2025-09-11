@@ -17,12 +17,12 @@
 
 package org.apache.spark.util
 
-import org.apache.spark.{SparkException, SparkFunSuite}
+import org.apache.spark.{SparkFunSuite}
 import org.apache.spark.internal.Logging
 
 object TestObjectLyftUtils {
   var testVar = 0L
-  def setVal() = {
+  def setVal(): Unit = {
     testVar = 1L
   }
 }
@@ -30,11 +30,12 @@ object TestObjectLyftUtils {
 class LyftUtilsSuite extends SparkFunSuite with ResetSystemProperties with Logging {
 
   test("callObjectMethodNoArguments") {
-    // Test calling the method using reflection 1
-    val v = LyftUtils.callObjectMethodNoArguments("org.apache.spark.util.TestObjectLyftUtils$", "setVal")
+    // Test calling the method using reflection
+    val v = LyftUtils.callObjectMethodNoArguments(
+      "org.apache.spark.util.TestObjectLyftUtils$", "setVal")
     assert(v === true)
     assert(TestObjectLyftUtils.testVar === 1)
-    assert(false ==
-      LyftUtils.callObjectMethodNoArguments("org.apache.spark.util.TestObjectLyftUtils$", "setVal1"))
+    assert(false == LyftUtils.callObjectMethodNoArguments(
+      "org.apache.spark.util.TestObjectLyftUtils$", "setVal1"))
   }
 }
