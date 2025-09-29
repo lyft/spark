@@ -130,7 +130,9 @@ class PathOutputCommitProtocol(
           logDebug(
             s"Committer $committer has declared compatibility with dynamic partition overwrite")
         } else {
-          throw new IOException(PathOutputCommitProtocol.UNSUPPORTED + ": " + committer)
+          // throw new IOException(PathOutputCommitProtocol.UNSUPPORTED + ": " + committer)
+          // The above exception is disabled with automatic value of
+          // fs.s3a.committer.staging.conflict-mode in HadoopMapReduceCommitProtocol.
         }
       }
     }

@@ -17,7 +17,7 @@
 
 package org.apache.spark.internal.io.cloud
 
-import java.io.{File, FileInputStream, FileOutputStream, IOException, ObjectInputStream, ObjectOutputStream}
+import java.io.{File, FileInputStream, FileOutputStream, ObjectInputStream, ObjectOutputStream}
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{Path, StreamCapabilities}
@@ -148,6 +148,9 @@ class CommitterBindingSuite extends SparkFunSuite {
    * Bind a job to a committer which doesn't support dynamic partitioning.
    * Job setup must fail, and calling `newTaskTempFileAbsPath()` must
    * raise `UnsupportedOperationException`.
+   * With custom patch https://github.com/lyft/spark/pull/34:
+   *  Job setup should now succeed (due to custom patch), but calling
+   *  `newTaskTempFileAbsPath()` must still raise `UnsupportedOperationException`.
    */
   test("reject dynamic partitioning if not supported") {
     val path = new Path("http://example/data")
@@ -162,14 +165,13 @@ class CommitterBindingSuite extends SparkFunSuite {
       jobId,
       path.toUri.toString,
       true)
-    val ioe = intercept[IOException] {
-      committer.setupJob(tContext)
-    }
-    if (!ioe.getMessage.contains(PathOutputCommitProtocol.UNSUPPORTED)) {
-      throw ioe
-    }
 
-    // calls to newTaskTempFileAbsPath() will be rejected
+    // Job setup should now succeed due to the custom patch that disabled
+    // the IOException throwing for unsupported dynamic partitioning
+    committer.setupJob(tContext)
+    committer.setupTask(tContext)
+
+    // calls to newTaskTempFileAbsPath() will still be rejected
     intercept[UnsupportedOperationException] {
       verifyAbsTempFileWorks(tContext, committer)
     }
