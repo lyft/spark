@@ -4316,7 +4316,7 @@ object SQLConf {
       .doc("When set to true, Spark SQL could read the files of " +
         " partitioned hive table from subdirectories under root path of table")
       .booleanConf
-      .createWithDefault(true)
+      .createWithDefault(false)
 
   val LEGACY_AVRO_ALLOW_INCOMPATIBLE_SCHEMA =
     buildConf("spark.sql.legacy.avro.allowIncompatibleSchema")
