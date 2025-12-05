@@ -225,6 +225,27 @@ private[spark] class SparkHadoopUtil extends Logging {
     if (baseStatus.isDirectory) recurse(baseStatus) else Seq(baseStatus)
   }
 
+  /**
+   * [LYFT-INTERNAL] Removed from OSS Spark: https://github.com/apache/spark/pull/40942/
+   */
+  def listLeafDirStatuses(fs: FileSystem, basePath: Path): Seq[FileStatus] = {
+    listLeafDirStatuses(fs, fs.getFileStatus(basePath))
+  }
+
+  /**
+   * [LYFT-INTERNAL] Removed from OSS Spark: https://github.com/apache/spark/pull/40942/
+   */
+  def listLeafDirStatuses(fs: FileSystem, baseStatus: FileStatus): Seq[FileStatus] = {
+    def recurse(status: FileStatus): Seq[FileStatus] = {
+      val (directories, files) = fs.listStatus(status.getPath).partition(_.isDirectory)
+      val leaves = if (directories.isEmpty) Seq(status) else Seq.empty[FileStatus]
+      leaves ++ directories.flatMap(dir => listLeafDirStatuses(fs, dir))
+    }
+
+    assert(baseStatus.isDirectory)
+    recurse(baseStatus)
+  }
+
   def isGlobPath(pattern: Path): Boolean = {
     pattern.toString.exists("{}[]*?\\".toSet.contains)
   }
