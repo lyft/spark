@@ -4311,6 +4311,13 @@ object SQLConf {
       .booleanConf
       .createWithDefault(false)
 
+    val READ_PARTITION_WITH_SUBDIRECTORY_ENABLED =
+    buildConf("spark.sql.sources.readPartitionWithSubdirectory.enabled")
+      .doc("When set to true, Spark SQL could read the files of " +
+        " partitioned hive table from subdirectories under root path of table")
+      .booleanConf
+      .createWithDefault(false)
+
   val LEGACY_AVRO_ALLOW_INCOMPATIBLE_SCHEMA =
     buildConf("spark.sql.legacy.avro.allowIncompatibleSchema")
       .internal()
@@ -5253,6 +5260,9 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
   def decorrelateInnerQueryEnabled: Boolean = getConf(SQLConf.DECORRELATE_INNER_QUERY_ENABLED)
 
   def maxConcurrentOutputFileWriters: Int = getConf(SQLConf.MAX_CONCURRENT_OUTPUT_FILE_WRITERS)
+
+  def readPartitionWithSubdirectoryEnabled: Boolean =
+    getConf(READ_PARTITION_WITH_SUBDIRECTORY_ENABLED)
 
   def plannedWriteEnabled: Boolean = getConf(SQLConf.PLANNED_WRITE_ENABLED)
 
